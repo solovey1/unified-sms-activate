@@ -38,6 +38,7 @@ asyncio.run(main())
 ## Supported services
 
 - **HeroSMS** (`sms_providers.providers.HeroSmsProvider`) - sms-activate-compatible.
+- **VAK SMS** (`sms_providers.providers.VakSmsProvider`) - sms-activate-compatible.
 - **OnlineSim** (`sms_providers.providers.OnlineSimProvider`) - own protocol.
 
 Service and country codes (`service="tg"`, `country=0`, ...) are passed

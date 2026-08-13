@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `HeroSmsProvider` — thin `SmsActivateCompatibleProvider` subclass for
   [hero-sms.com](https://hero-sms.com).
 - `OnlineSimProvider` — dedicated client for the OnlineSim API.
+- `VakSmsProvider` — thin `SmsActivateCompatibleProvider` subclass for
+  [vak-sms.com](https://vak-sms.com).
 - `proxy` constructor parameter on `SmsActivateCompatibleProvider` and
   `OnlineSimProvider` for routing requests through an HTTP(S)/SOCKS proxy.
 - Discovery: `get_services()`/`get_countries()` on `BaseSmsProvider` (opt-in,
