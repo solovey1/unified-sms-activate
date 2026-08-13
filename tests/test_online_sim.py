@@ -53,7 +53,7 @@ async def test_no_operations_raises_activation_not_found():
 # 26. get_number with a number already in the response -> PhoneNumber, id == "10000"
 async def test_get_number_with_number_in_response():
     recorder = responses(
-        httpx.Response(200, json={"response": 1, "tzid": 10000, "number": "79001112233"})
+        httpx.Response(200, json={"response": 1, "tzid": 10000, "number": "+79001112233"})
     )
     provider = make_provider(recorder)
     number = await provider.get_number(service="tg")
@@ -68,7 +68,7 @@ async def test_get_number_polls_getstate_until_number_appears():
         httpx.Response(200, json={"response": 1, "tzid": 10000}),
         httpx.Response(200, json=[{"response": "TZ_INPOOL", "tzid": 10000}]),
         httpx.Response(
-            200, json=[{"response": "TZ_NUM_WAIT", "tzid": 10000, "number": "79001112233"}]
+            200, json=[{"response": "TZ_NUM_WAIT", "tzid": 10000, "number": "+79001112233"}]
         ),
     )
     provider = make_provider(recorder)
@@ -120,7 +120,7 @@ async def test_get_number_treats_empty_getstate_list_as_still_waiting():
         httpx.Response(200, json=[]),
         httpx.Response(200, json=[{"response": "TZ_INPOOL", "tzid": 10000}]),
         httpx.Response(
-            200, json=[{"response": "TZ_NUM_WAIT", "tzid": 10000, "number": "79001112233"}]
+            200, json=[{"response": "TZ_NUM_WAIT", "tzid": 10000, "number": "+79001112233"}]
         ),
     )
     provider = make_provider(recorder, number_timeout=10, poll_interval=0.001)

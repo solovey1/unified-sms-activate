@@ -302,7 +302,9 @@ class OnlineSimProvider(BaseSmsProvider):
                 raise
         return PhoneNumber(
             id=tzid,
-            phone=phone,
+            # OnlineSim returns numbers as "+79001234567"; the PhoneNumber
+            # contract is digits only, no "+". The original value stays in raw.
+            phone=phone.lstrip("+"),
             provider=self.name,
             service=service,
             country=str(country_value) if country_value is not None else None,
