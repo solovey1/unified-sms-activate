@@ -48,7 +48,17 @@ asyncio.run(main())
   `country` is a two-letter ISO code (`"RU"`), not numeric like the other
   providers. `gateway` is required for `get_number()` and has no default -
   pass `gateway=` per call or `default_gateway=` in the constructor; see
-  `get_gateways()` for the current list.
+  `get_gateways()` for the current list. Some gateways (`plankton`, `larry`)
+  additionally require a `route` - pick one from `get_prices()` (live, the
+  route id sits in each entry's `"gateway"` key, despite the docs saying
+  `"route"`) and pass it to `get_number(..., route=...)`:
+
+  ```python
+  prices = await provider.get_prices("bybit", "UA", gateway="plankton")
+  cheapest = min(prices, key=lambda p: p["price"])
+  route = cheapest.get("route") or cheapest.get("gateway")   # "DQV"
+  number = await provider.get_number("bybit", "UA", gateway="plankton", route=route)
+  ```
 
 `PhoneNumber.country_phone_code` (the E.164 phone prefix, no `+`) is only
 filled in for sms-activate-compatible providers when `use_get_number_v2 =

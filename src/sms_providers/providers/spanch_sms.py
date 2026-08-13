@@ -413,12 +413,21 @@ class SpanchSmsProvider(BaseSmsProvider):
         ``service``/``country`` are required here (the API itself requires
         them), unlike the base class's ``get_prices()``. Returns
         ``data["prices"]`` exactly as received, no DTO: a list of
-        ``{"price": ..., "route": ...}`` when ``gateway`` is given (per the
-        docs), or a dict keyed by gateway name when it's omitted (observed
-        live: ``{"crabbs": [...], "bob": [...]}``) - both shapes are valid
-        and returned as-is. No unification yet: HeroSMS's ``getPrices`` has
+        per-route entries when ``gateway`` is given, or a dict keyed by
+        gateway name when it's omitted (observed live:
+        ``{"crabbs": [...], "bob": [...]}``) - both shapes are valid and
+        returned as-is. No unification yet: HeroSMS's ``getPrices`` has
         a completely different shape; do it when a second real data point
         exists, not the first.
+
+        Live quirk (2026-08-13): with ``gateway=`` given, the route
+        identifier of each entry arrives in the ``"gateway"`` key, not
+        ``"route"`` as the docs show - ``[{"price": 0.46, "gateway":
+        "DQV"}, ...]``. Read ``entry.get("route") or entry.get("gateway")``
+        to be safe. Gateways such as ``plankton``/``larry`` require picking
+        one of these routes and passing it to
+        ``get_number(..., route=...)`` - a missing route is rejected by the
+        API with a message listing the valid values.
         """
         data = await self._request(
             "getPrices", service=service, country=country, gateway=gateway
