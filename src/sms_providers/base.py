@@ -8,6 +8,7 @@ Defines the shared DTOs (:class:`PhoneNumber`, :class:`SmsCode`), the
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
@@ -27,6 +28,7 @@ __all__ = [
     "ActivationTimeout",
     "BaseSmsProvider",
     "Country",
+    "CountryPrice",
     "InsufficientBalance",
     "InvalidApiKey",
     "NoNumbersAvailable",
@@ -142,6 +144,31 @@ class Country:
 
     def __str__(self) -> str:
         return self.code
+
+
+@dataclass(frozen=True, slots=True)
+class CountryPrice:
+    """Availability/price of one service in one country, as returned by discovery.
+
+    Where :meth:`BaseSmsProvider.get_services`/:meth:`get_countries` answer
+    "what services/countries exist", :meth:`BaseSmsProvider.get_prices`
+    answers "where and for how much is a service available" in one call.
+    ``country``/``service`` are exactly the values :meth:`get_number` accepts
+    as ``country=``/``service=`` for this same provider.
+    """
+
+    country: str
+    service: str
+    cost: Decimal | None = None
+    """Activation price, if the provider reports it for this country/service pair."""
+    count: int | None = None
+    """Numbers currently available, if the provider reports it. ``0`` is a
+    real, meaningful value (out of stock) and is never filtered out."""
+    raw: Mapping[str, Any] = field(default_factory=dict)
+    """Escape hatch: the provider's raw response for this entry."""
+
+    def __str__(self) -> str:
+        return f"{self.service}@{self.country}"
 
 
 class SmsProviderError(Exception):
@@ -297,11 +324,17 @@ class BaseSmsProvider(ABC):
         """Non-blocking check for a code. ``None`` means no code yet."""
         raise NotImplementedError
 
-    async def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(
+        self, country: str | int | None = None, search: str | None = None
+    ) -> list[Service]:
         """Services available from this provider; optionally narrow by country.
 
-        An empty list is a valid result, not an error. Element order follows
-        the API's own order; results are never sorted or de-duplicated.
+        ``search`` narrows the results to services whose code or name
+        contains it, case-insensitively; support and exact matching
+        semantics (server-side filter vs. client-side substring) are up to
+        each provider. An empty list is a valid result, not an error.
+        Element order follows the API's own order; results are never sorted
+        or de-duplicated.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support get_services()")
 
@@ -312,6 +345,54 @@ class BaseSmsProvider(ABC):
         the API's own order; results are never sorted or de-duplicated.
         """
         raise NotImplementedError(f"{type(self).__name__} does not support get_countries()")
+
+    async def get_prices(
+        self, service: str | None = None, country: str | int | None = None
+    ) -> list[CountryPrice]:
+        """Where and for how much numbers are available, in one call.
+
+        An empty list is a valid result, not an error. Element order follows
+        the API's own order; results are never sorted or de-duplicated.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_prices()")
+
+    _DOMAIN_SUFFIX_RE = re.compile(r"\.[a-z]{2,4}$")
+
+    @classmethod
+    def _normalize_service_name(cls, value: str) -> str:
+        return cls._DOMAIN_SUFFIX_RE.sub("", value.strip().lower())
+
+    async def find_service(
+        self, name: str, country: str | int | None = None
+    ) -> Service | None:
+        """Find a service by code or name in one call, tolerating naming drift.
+
+        Different providers describe the same service differently - e.g.
+        hero-sms lists "Bybit", vak-sms lists "bybit.com" - so an exact,
+        case-sensitive lookup on either code or name alone is not enough.
+        Built on :meth:`get_services` (called once, with ``search=name``),
+        then matched in priority order, all case-insensitive: (1) exact
+        ``code``, (2) exact ``name``, (3) ``name`` with a trailing domain
+        suffix (``.com``, ``.io``, ...) stripped from both sides. Returns
+        the first match found at the highest matching priority, or ``None``
+        if nothing matches at any of the three.
+        """
+        services = await self.get_services(country=country, search=name)
+        name_lower = name.strip().lower()
+        name_normalized = self._normalize_service_name(name)
+        for service in services:
+            if service.code.lower() == name_lower:
+                return service
+        for service in services:
+            if service.name is not None and service.name.strip().lower() == name_lower:
+                return service
+        for service in services:
+            if (
+                service.name is not None
+                and self._normalize_service_name(service.name) == name_normalized
+            ):
+                return service
+        return None
 
     async def aclose(self) -> None: ...
 

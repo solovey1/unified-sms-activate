@@ -17,6 +17,7 @@ from sms_providers.base import (
     ActivationStatus,
     BaseSmsProvider,
     Country,
+    CountryPrice,
     InsufficientBalance,
     InvalidApiKey,
     NoNumbersAvailable,
@@ -237,6 +238,15 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             )
         return parts[1:]
 
+    @staticmethod
+    def _parse_decimal(value: Any) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            return None
+
     # --- public API ---
 
     async def get_balance(self) -> Decimal:
@@ -324,15 +334,6 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             )
         country_code = data.get("countryCode")
         country_phone_code = data.get("countryPhoneCode")
-        raw_cost = data.get("activationCost")
-        cost: Decimal | None
-        if raw_cost is None:
-            cost = None
-        else:
-            try:
-                cost = Decimal(str(raw_cost))
-            except InvalidOperation:
-                cost = None
         return PhoneNumber(
             id=str(data["activationId"]),
             phone=str(data["phoneNumber"]),
@@ -344,7 +345,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
                 else (str(country_value) if country_value is not None else None)
             ),
             country_phone_code=str(country_phone_code) if country_phone_code is not None else None,
-            cost=cost,
+            cost=self._parse_decimal(data.get("activationCost")),
             raw=data,
         )
 
@@ -405,7 +406,12 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
     #: action here", as opposed to a real error that should propagate unchanged.
     _UNSUPPORTED_ACTION_CODES = frozenset({"BAD_ACTION", "ACTION_NOT_AVAILABLE"})
 
-    async def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(
+        self, country: str | int | None = None, search: str | None = None
+    ) -> list[Service]:
+        """``getServicesList`` has no server-side search - ``search`` filters
+        client-side, by substring (case-insensitive) on ``code`` or ``name``.
+        """
         try:
             data = await self._request("getServicesList", country=country)
         except ProviderAPIError as exc:
@@ -425,7 +431,63 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
                 raise ProviderAPIError(
                     f"unexpected service entry: {item!r}", provider=self.name, raw=data
                 )
-            result.append(Service(code=str(item["code"]), name=item.get("name"), raw=item))
+            result.append(
+                Service(
+                    code=str(item["code"]),
+                    name=item.get("name"),
+                    count=item.get("count"),
+                    price=self._parse_decimal(item.get("price")),
+                    raw=item,
+                )
+            )
+        if search is not None:
+            needle = search.strip().lower()
+            result = [
+                s
+                for s in result
+                if needle in s.code.lower() or (s.name is not None and needle in s.name.lower())
+            ]
+        return result
+
+    async def get_prices(
+        self, service: str | None = None, country: str | int | None = None
+    ) -> list[CountryPrice]:
+        """``action=getPrices``, optionally filtered by ``service``/``country``.
+
+        Response shape: ``{"<country_id>": {"<service>": {"cost": 0.19,
+        "count": 1224, "physicalCount": null}}}``. ``count == 0`` is
+        returned as-is, not filtered out - the caller decides what an
+        exhausted country/service pair means for them.
+        """
+        data = await self._request("getPrices", service=service, country=country)
+        if not isinstance(data, dict):
+            raise ProviderAPIError(
+                f"unexpected getPrices response: {data!r}", provider=self.name, raw=data
+            )
+        result = []
+        for country_id, services in data.items():
+            if not isinstance(services, dict):
+                raise ProviderAPIError(
+                    f"unexpected getPrices country entry: {services!r}",
+                    provider=self.name,
+                    raw=data,
+                )
+            for service_code, entry in services.items():
+                if not isinstance(entry, dict):
+                    raise ProviderAPIError(
+                        f"unexpected getPrices service entry: {entry!r}",
+                        provider=self.name,
+                        raw=data,
+                    )
+                result.append(
+                    CountryPrice(
+                        country=str(country_id),
+                        service=str(service_code),
+                        cost=self._parse_decimal(entry.get("cost")),
+                        count=entry.get("count"),
+                        raw=entry,
+                    )
+                )
         return result
 
     async def get_countries(self) -> list[Country]:

@@ -13,7 +13,7 @@ def test_all_public_names_importable_from_top_level():
 
 def test_all_matches_spec():
     expected = {
-        "ActivationStatus", "PhoneNumber", "SmsCode", "Service", "Country",
+        "ActivationStatus", "PhoneNumber", "SmsCode", "Service", "Country", "CountryPrice",
         "BaseSmsProvider", "SmsActivateCompatibleProvider", "SmsProviderManager",
         "SmsProviderError", "InvalidApiKey", "AccountBlocked", "InsufficientBalance",
         "NoNumbersAvailable", "RateLimited", "ActivationNotFound", "ActivationCancelled",

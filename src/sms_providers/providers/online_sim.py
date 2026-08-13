@@ -17,6 +17,7 @@ from sms_providers.base import (
     ActivationTimeout,
     BaseSmsProvider,
     Country,
+    CountryPrice,
     InsufficientBalance,
     InvalidApiKey,
     NoNumbersAvailable,
@@ -438,14 +439,19 @@ class OnlineSimProvider(BaseSmsProvider):
 
     # --- discovery ---
 
-    async def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(
+        self, country: str | int | None = None, search: str | None = None
+    ) -> list[Service]:
         """Services available from OnlineSim; optionally narrow by country.
 
         There is no dedicated services endpoint - this reads the ``services``
         key of ``getTariffs.php``, the same call used by :meth:`get_countries`.
         ``name`` is localized by the constructor's ``lang`` (default ``"en"``).
+        Without ``search``, the API only returns its top ~30 services -
+        ``search`` is forwarded as ``getTariffs.php``'s own ``filter=``
+        parameter to reach anything beyond that.
         """
-        data = await self._request("getTariffs", country=country)
+        data = await self._request("getTariffs", country=country, filter=search)
         services = self._tariffs_section(data, "services")
         result = []
         for key, item in services.items():
@@ -485,6 +491,58 @@ class OnlineSimProvider(BaseSmsProvider):
             country_code = item.get("code")
             code = str(country_code) if country_code is not None else key.lstrip("_")
             result.append(Country(code=code, name=item.get("name"), raw=item))
+        return result
+
+    async def get_prices(
+        self, service: str | None = None, country: str | int | None = None
+    ) -> list[CountryPrice]:
+        """Where and for how much ``service`` is available, via ``getTariffs.php``.
+
+        ``service`` is required: without a ``filter=``, ``getTariffs`` has no
+        meaningful "all services" listing (see :meth:`get_services`'s
+        docstring). Without ``country``, the API reports only which
+        countries have the service available, with an empty ``services``
+        section - so ``cost``/``count`` come back ``None`` (presence is
+        known, volume/price is not). With ``country``, the ``services``
+        section carries the real count/price for that one country.
+        """
+        if service is None:
+            raise ValueError(
+                "OnlineSim requires service= for get_prices() - getTariffs.php "
+                "without a filter= has no meaningful 'all services' listing"
+            )
+        if country is None:
+            data = await self._request("getTariffs", filter=service)
+            countries = self._tariffs_section(data, "countries")
+            result = []
+            for key, item in countries.items():
+                if not isinstance(item, dict):
+                    raise ProviderAPIError(
+                        f"unexpected country entry: {item!r}", provider=self.name, raw=data
+                    )
+                country_code = item.get("code")
+                code = str(country_code) if country_code is not None else key.lstrip("_")
+                result.append(CountryPrice(country=code, service=service, raw=item))
+            return result
+        data = await self._request("getTariffs", filter=service, country=country)
+        services = self._tariffs_section(data, "services")
+        result = []
+        for key, item in services.items():
+            if not isinstance(item, dict):
+                raise ProviderAPIError(
+                    f"unexpected service entry: {item!r}", provider=self.name, raw=data
+                )
+            slug = item.get("slug")
+            code = str(slug) if slug else key.lstrip("_")
+            result.append(
+                CountryPrice(
+                    country=str(country),
+                    service=code,
+                    cost=self._parse_price(item.get("price")),
+                    count=item.get("count"),
+                    raw=item,
+                )
+            )
         return result
 
     def _tariffs_section(self, data: Any, key: str) -> dict[str, Any]:

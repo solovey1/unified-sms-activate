@@ -664,6 +664,98 @@ async def test_four_line_clone_with_v2_reports_country_phone_code():
     assert number.country_phone_code == "7"
 
 
+# get_prices: action=getPrices, parses the nested country -> service -> {cost,count}
+# shape; count == 0 is preserved, not filtered out (a real, meaningful value).
+async def test_get_prices_parses_nested_response_and_keeps_zero_count():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "6": {"tg": {"cost": 0.19, "count": 1224, "physicalCount": None}},
+                "7": {"tg": {"cost": 0.25, "count": 0, "physicalCount": 10}},
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    prices = await provider.get_prices()
+    assert len(prices) == 2
+    by_country = {p.country: p for p in prices}
+    assert by_country["6"].service == "tg"
+    assert by_country["6"].cost == Decimal("0.19")
+    assert by_country["6"].count == 1224
+    assert by_country["7"].count == 0  # not filtered out
+    assert by_country["7"].raw["physicalCount"] == 10
+
+
+async def test_get_prices_forwards_service_and_country_filters():
+    recorder = responses(httpx.Response(200, json={}))
+    provider = make_provider(recorder)
+    await provider.get_prices(service="tg", country=6)
+    params = recorder.requests[0].url.params
+    assert params["action"] == "getPrices"
+    assert params["service"] == "tg"
+    assert params["country"] == "6"
+
+
+# get_services: getServicesList has no server-side search - search filters
+# client-side by substring (case-insensitive) on code/name; count/price are
+# filled in when the API returns them (previously silently dropped).
+async def test_get_services_search_filters_client_side_and_fills_count_price():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "services": [
+                    {"code": "tg", "name": "Telegram", "count": 500, "price": "0.15"},
+                    {"code": "wa", "name": "Whatsapp"},
+                ],
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    services = await provider.get_services(search="tele")
+    assert [s.code for s in services] == ["tg"]
+    assert services[0].count == 500
+    assert services[0].price == Decimal("0.15")
+    # search is client-side only - never sent to the API
+    assert "search" not in recorder.requests[0].url.params
+    assert "filter" not in recorder.requests[0].url.params
+
+
+async def test_get_services_search_is_case_insensitive_and_matches_code_too():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "services": [
+                    {"code": "bybit", "name": "Bybit"},
+                    {"code": "tg", "name": "Telegram"},
+                ],
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    services = await provider.get_services(search="BYBIT")
+    assert [s.code for s in services] == ["bybit"]
+
+
+# find_service: "bybit" matches a catalog entry named "bybit.com" (vak-sms-style
+# listing) via the domain-suffix-stripped priority.
+async def test_find_service_matches_domain_suffixed_catalog_entry():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={"status": "success", "services": [{"code": "bybit", "name": "bybit.com"}]},
+        )
+    )
+    provider = make_provider(recorder)
+    service = await provider.find_service("bybit")
+    assert service is not None
+    assert service.code == "bybit"
+
+
 # §12.6: cancelling a task awaiting wait_code() propagates asyncio.CancelledError,
 # not SmsProviderError - invariant #6 in BaseSmsProvider's docstring.
 async def test_cancelling_wait_code_task_propagates_cancelled_error(monkeypatch):

@@ -438,3 +438,99 @@ async def test_get_number_country_defaults_and_polled_override():
     number2 = await provider2.get_number(service="tg")
     assert number2.country == "380"
     assert number2.country_phone_code == "380"
+
+
+# get_services(search=...) is forwarded as getTariffs.php's own filter= parameter -
+# without it the API only returns its top ~30 services.
+async def test_get_services_search_forwarded_as_filter_param():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {},
+                "services": {
+                    "_bybit": {
+                        "id": 203,
+                        "count": 9999,
+                        "price": "0.70",
+                        "service": "Bybit",
+                        "slug": "bybit",
+                    }
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    services = await provider.get_services(country=49, search="bybit")
+    request = recorder.requests[0]
+    assert request.url.params["filter"] == "bybit"
+    assert request.url.params["country"] == "49"
+    assert len(services) == 1
+    assert services[0].code == "bybit"
+
+
+# get_prices requires service= - getTariffs.php without a filter has no
+# meaningful "all services" listing.
+async def test_get_prices_without_service_raises_value_error():
+    provider = make_provider(responses())
+    with pytest.raises(ValueError, match="service="):
+        await provider.get_prices()
+
+
+# get_prices without country: only presence is known - count/cost come back
+# None for every country the service is available in.
+async def test_get_prices_without_country_returns_presence_only():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "services": {},
+                "countries": {
+                    "_49": {"name": "Germany", "code": 49},
+                    "_7": {"name": "Russia", "code": 7},
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    prices = await provider.get_prices(service="bybit")
+    assert {p.country for p in prices} == {"49", "7"}
+    assert all(p.service == "bybit" for p in prices)
+    assert all(p.cost is None and p.count is None for p in prices)
+    request = recorder.requests[0]
+    assert request.url.params["filter"] == "bybit"
+    assert "country" not in request.url.params
+
+
+# get_prices with country: real count/price for that one country.
+async def test_get_prices_with_country_returns_real_count_and_price():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {},
+                "services": {
+                    "_bybit": {
+                        "id": 203,
+                        "count": 9999,
+                        "price": "0.70",
+                        "service": "Bybit",
+                        "slug": "bybit",
+                    }
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    prices = await provider.get_prices(service="bybit", country=49)
+    assert len(prices) == 1
+    assert prices[0].country == "49"
+    assert prices[0].service == "bybit"
+    assert prices[0].count == 9999
+    assert prices[0].cost == Decimal("0.70")
+    request = recorder.requests[0]
+    assert request.url.params["filter"] == "bybit"
+    assert request.url.params["country"] == "49"

@@ -9,6 +9,7 @@ from sms_providers.base import (
     ActivationTimeout,
     BaseSmsProvider,
     Country,
+    CountryPrice,
     PhoneNumber,
     Service,
     SmsCode,
@@ -139,6 +140,86 @@ async def test_get_services_and_get_countries_raise_not_implemented_by_default()
         await provider.get_services()
     with pytest.raises(NotImplementedError):
         await provider.get_countries()
+
+
+# CountryPrice: frozen, str(x) == "service@country", raw defaults to {}.
+def test_country_price_is_frozen():
+    price = CountryPrice(country="7", service="tg")
+    with pytest.raises(FrozenInstanceError):
+        price.country = "1"  # type: ignore[misc]
+
+
+def test_country_price_str_is_service_at_country():
+    assert str(CountryPrice(country="7", service="tg")) == "tg@7"
+
+
+def test_country_price_defaults():
+    price = CountryPrice(country="7", service="tg")
+    assert price.cost is None
+    assert price.count is None
+    assert price.raw == {}
+
+
+async def test_get_prices_raises_not_implemented_by_default():
+    provider = _Dummy()
+    with pytest.raises(NotImplementedError):
+        await provider.get_prices()
+
+
+class _CatalogDummy(_Dummy):
+    """A provider with a fixed, hardcoded catalog - used to test find_service's
+    priority matching in isolation, without any HTTP mocking."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def get_services(self, country=None, search=None):
+        self.calls.append((country, search))
+        return [
+            Service(code="tg", name="Telegram"),
+            Service(code="bybit", name="bybit.com"),
+            Service(code="ig", name="Instagram"),
+            Service(code="foo", name="foo.io"),
+        ]
+
+
+async def test_find_service_matches_by_exact_code():
+    service = await _CatalogDummy().find_service("tg")
+    assert service is not None
+    assert service.code == "tg"
+
+
+async def test_find_service_matches_by_exact_name():
+    service = await _CatalogDummy().find_service("Instagram")
+    assert service is not None
+    assert service.code == "ig"
+
+
+async def test_find_service_matches_domain_suffix_stripped_name():
+    service = await _CatalogDummy().find_service("bybit")
+    assert service is not None
+    assert service.code == "bybit"
+    assert service.name == "bybit.com"
+
+    service_io = await _CatalogDummy().find_service("foo")
+    assert service_io is not None
+    assert service_io.code == "foo"
+
+
+async def test_find_service_is_case_insensitive():
+    service = await _CatalogDummy().find_service("TELEGRAM")
+    assert service is not None
+    assert service.code == "tg"
+
+
+async def test_find_service_returns_none_when_nothing_matches():
+    assert await _CatalogDummy().find_service("nonexistent") is None
+
+
+async def test_find_service_forwards_country_and_search_to_get_services():
+    provider = _CatalogDummy()
+    await provider.find_service("tg", country=7)
+    assert provider.calls == [(7, "tg")]
 
 
 # 61. PhoneNumber.country_phone_code defaults to None, DTO stays frozen,

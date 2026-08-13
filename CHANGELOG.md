@@ -43,3 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Async-first API built on `httpx.AsyncClient`.
 - `PhoneNumber.country_phone_code`; opt-in `getNumberV2` for
   sms-activate-compatible providers (`use_get_number_v2`).
+- `get_prices()` on `BaseSmsProvider` (opt-in, `NotImplementedError` by
+  default) with the `CountryPrice` DTO, implemented for
+  `SmsActivateCompatibleProvider` (`getPrices`) and `OnlineSimProvider`
+  (`getTariffs`, requires `service=`).
+- `search=` parameter on `get_services()` (client-side substring filter for
+  `SmsActivateCompatibleProvider`, server-side `filter=` for `OnlineSimProvider`);
+  `SmsActivateCompatibleProvider.get_services()` now also fills in
+  `Service.count`/`Service.price` when the API returns them.
+- `find_service(name, country=None)` on `BaseSmsProvider` - looks up a
+  service by code or name, tolerating a trailing domain suffix
+  (e.g. `"bybit"` matches a `"bybit.com"` listing).

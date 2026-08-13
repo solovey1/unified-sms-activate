@@ -64,7 +64,32 @@ for service in await provider.get_services():
 ```
 
 `Service.code`/`Country.code` are exactly the values `get_number()` accepts
-for `service=`/`country=` on that same provider.
+for `service=`/`country=` on that same provider. `get_services(search=...)`
+narrows the listing by a case-insensitive substring on code/name; providers
+describe the same service differently (HeroSMS: `"Bybit"`, VAK SMS:
+`"bybit.com"`), so prefer `find_service(name)` over guessing a code by hand
+- it tries an exact code, then an exact name, then a name with a trailing
+domain suffix stripped from both sides, and returns the first match or
+`None`:
+
+```python
+service = await provider.find_service("bybit")  # -> Service(code="bybit", ...)
+```
+
+## Prices
+
+`get_prices(service=None, country=None)` answers "where and for how much is
+a service available", in one call - `Decimal` cost and `int` count per
+country, as a list of `CountryPrice`:
+
+```python
+for price in await provider.get_prices(service="tg"):
+    print(price.country, price.cost, price.count)
+```
+
+Support and exact behavior vary by provider - see each provider's
+docstring. `count == 0` is a real, meaningful value (out of stock) and is
+never filtered out; it's up to the caller to decide what to do with it.
 
 ## Adding your own service
 
