@@ -453,6 +453,19 @@ class OnlineSimProvider(BaseSmsProvider):
         """
         data = await self._request("getTariffs", country=country, filter=search)
         services = self._tariffs_section(data, "services")
+        if search is not None and country is None and not services:
+            # getTariffs&filter=X without country= answers with the countries
+            # where the service exists but an EMPTY services section (verified
+            # live). Re-ask with the first of those countries - one extra
+            # request, only on this branch.
+            countries = self._tariffs_section(data, "countries")
+            for item in countries.values():
+                if isinstance(item, dict) and item.get("code") is not None:
+                    data = await self._request(
+                        "getTariffs", country=item["code"], filter=search
+                    )
+                    services = self._tariffs_section(data, "services")
+                    break
         result = []
         for key, item in services.items():
             if not isinstance(item, dict):

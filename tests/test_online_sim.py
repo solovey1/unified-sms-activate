@@ -534,3 +534,77 @@ async def test_get_prices_with_country_returns_real_count_and_price():
     request = recorder.requests[0]
     assert request.url.params["filter"] == "bybit"
     assert request.url.params["country"] == "49"
+
+
+# get_services(search=X) without country: the first getTariffs&filter=X response
+# carries only the countries section (services is empty) - the provider must
+# re-ask with the first of those countries instead of returning [].
+async def test_get_services_search_without_country_follows_up():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {"_49": {"name": "Germany", "code": 49}},
+                "services": {},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {"_49": {"name": "Germany", "code": 49}},
+                "services": {
+                    "_bybit": {
+                        "id": 203,
+                        "count": 9999,
+                        "price": "0.70",
+                        "service": "Bybit",
+                        "slug": "bybit",
+                    }
+                },
+            },
+        ),
+    )
+    provider = make_provider(recorder)
+    services = await provider.get_services(search="bybit")
+    assert [s.code for s in services] == ["bybit"]
+    assert recorder.call_count == 2
+    assert recorder.requests[1].url.params["country"] == "49"
+    # and find_service on top of it now works without country=
+    recorder2 = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {"_49": {"name": "Germany", "code": 49}},
+                "services": {},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {},
+                "services": {
+                    "_bybit": {"id": 203, "count": 9999, "price": "0.70",
+                               "service": "Bybit", "slug": "bybit"}
+                },
+            },
+        ),
+    )
+    provider2 = make_provider(recorder2)
+    found = await provider2.find_service("bybit")
+    assert found is not None and found.code == "bybit"
+
+
+# search with an unknown service: countries is empty too -> [] without a second request
+async def test_get_services_search_unknown_service_returns_empty():
+    recorder = responses(
+        httpx.Response(
+            200, json={"response": "1", "countries": {}, "services": {}}
+        )
+    )
+    provider = make_provider(recorder)
+    assert await provider.get_services(search="nosuch") == []
+    assert recorder.call_count == 1
