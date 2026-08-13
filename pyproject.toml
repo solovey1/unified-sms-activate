@@ -26,7 +26,7 @@ classifiers = [
 dependencies = ["httpx>=0.27,<1.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "pytest-cov", "ruff", "mypy"]
 
 [project.urls]
 Homepage = "https://github.com/solovey1/unified-sms-activate"
@@ -39,6 +39,7 @@ packages = ["src/sms_providers"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100

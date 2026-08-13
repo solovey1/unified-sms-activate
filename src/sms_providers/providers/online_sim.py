@@ -95,6 +95,10 @@ class OnlineSimProvider(BaseSmsProvider):
     Rate limiting (confirmed by live testing: after ~6 fast requests the
     service starts dropping TCP connections):
     * ``min_request_interval`` throttles every request, including retries.
+      Throttling is concurrency-safe: concurrent calls on the same provider
+      instance are serialized through an internal ``asyncio.Lock``, so the
+      minimum interval holds even when several coroutines call the provider
+      at once.
     * ``poll_interval`` defaults to 8s (vs. 5s for sms-activate).
     * ``max_retries`` defaults to 3 with 1/2/4s backoff, retrying
       ``httpx.TransportError`` (including ``ReadError``/``ConnectError``/
@@ -131,7 +135,7 @@ class OnlineSimProvider(BaseSmsProvider):
         max_retries: int = 3,
         min_request_interval: float = 1.0,
         number_timeout: float = 60.0,
-        client: httpx.Client | None = None,
+        client: httpx.AsyncClient | None = None,
         proxy: str | None = None,
     ) -> None:
         if not api_key:
@@ -160,19 +164,19 @@ class OnlineSimProvider(BaseSmsProvider):
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, base_url={self.base_url!r})"
 
-    def close(self) -> None:
+    async def aclose(self) -> None:
         if self._owns_client:
-            self._client.close()
+            await self._client.aclose()
 
     # --- transport ---
 
-    def _request(self, method: str, **params: Any) -> dict[str, Any] | list[Any]:
+    async def _request(self, method: str, **params: Any) -> dict[str, Any] | list[Any]:
         query = {
             "apikey": self._api_key,
             "lang": self.lang,
             **{k: v for k, v in params.items() if v is not None},
         }
-        response = request_with_retry(
+        response = await request_with_retry(
             client=self._client,
             url=f"{self.base_url}/{method}.php",
             params=query,
@@ -202,17 +206,17 @@ class OnlineSimProvider(BaseSmsProvider):
             )
         raise exc_cls(message, provider=self.name, code=code, raw=raw)
 
-    def _getstate_elements(self, tzid: str) -> list[Any]:
-        data = self._request("getState", tzid=tzid, message_to_code=1)
+    async def _getstate_elements(self, tzid: str) -> list[Any]:
+        data = await self._request("getState", tzid=tzid, message_to_code=1)
         if not isinstance(data, list):
             raise ProviderAPIError(
                 f"unexpected getState response: {data!r}", provider=self.name, raw=data
             )
         return data
 
-    def _state(self, tzid: str) -> dict[str, Any]:
+    async def _state(self, tzid: str) -> dict[str, Any]:
         """Fetch the operation state (``getState``) and return its first element."""
-        elements = self._getstate_elements(tzid)
+        elements = await self._getstate_elements(tzid)
         if not elements:
             raise ActivationNotFound(
                 f"no operation found for tzid={tzid}", provider=self.name, code=str(tzid)
@@ -254,8 +258,8 @@ class OnlineSimProvider(BaseSmsProvider):
 
     # --- public API ---
 
-    def get_balance(self) -> Decimal:
-        data = self._request("getBalance")
+    async def get_balance(self) -> Decimal:
+        data = await self._request("getBalance")
         if not isinstance(data, dict) or "balance" not in data:
             raise ProviderAPIError(
                 f"unexpected getBalance response: {data!r}", provider=self.name, raw=data
@@ -267,30 +271,32 @@ class OnlineSimProvider(BaseSmsProvider):
                 f"unexpected balance value: {data['balance']!r}", provider=self.name, raw=data
             ) from exc
 
-    def get_number(
+    async def get_number(
         self, service: str, country: str | int | None = None, **options: Any
     ) -> PhoneNumber:
         country_value = country if country is not None else self.default_country
         # number=1 (return the number in the getNum response) is not user-overridable.
         options = dict(options)
         options.pop("number", None)
-        data = self._request("getNum", service=service, country=country_value, number=1, **options)
+        data = await self._request(
+            "getNum", service=service, country=country_value, number=1, **options
+        )
         if not isinstance(data, dict) or "tzid" not in data:
             raise ProviderAPIError(
                 f"unexpected getNum response: {data!r}", provider=self.name, raw=data
             )
         tzid = str(data["tzid"])
-        phone = data.get("number") or None
+        phone: str | None = data.get("number") or None
         if phone is None:
             try:
-                phone = self._poll(
+                phone = await self._poll(
                     lambda: self._peek_number(tzid),
                     timeout=self.number_timeout,
                     interval=self.poll_interval,
                 )
             except ActivationTimeout:
                 try:
-                    self.cancel(tzid)
+                    await self.cancel(tzid)
                 except SmsProviderError:
                     pass
                 raise
@@ -303,7 +309,7 @@ class OnlineSimProvider(BaseSmsProvider):
             raw={"getNum": data},
         )
 
-    def _peek_number(self, tzid: str) -> str | None:
+    async def _peek_number(self, tzid: str) -> str | None:
         """Poll step used while waiting for ``getNum`` to allocate a number.
 
         Unlike :meth:`_state`, an empty element list here means the operation
@@ -312,7 +318,7 @@ class OnlineSimProvider(BaseSmsProvider):
         already expired, so stop waiting immediately instead of looping until
         ``number_timeout``.
         """
-        elements = self._getstate_elements(tzid)
+        elements = await self._getstate_elements(tzid)
         if not elements:
             return None
         element = elements[0]
@@ -328,13 +334,13 @@ class OnlineSimProvider(BaseSmsProvider):
             )
         return element.get("number") or None
 
-    def get_status(self, activation_id: str) -> ActivationStatus:
-        element = self._state(str(activation_id))
+    async def get_status(self, activation_id: str) -> ActivationStatus:
+        element = await self._state(str(activation_id))
         status, _code = self._parse_state_element(element)
         return status
 
-    def get_code(self, activation_id: str) -> SmsCode | None:
-        element = self._state(str(activation_id))
+    async def get_code(self, activation_id: str) -> SmsCode | None:
+        element = await self._state(str(activation_id))
         status, code = self._parse_state_element(element)
         if status is ActivationStatus.EXPIRED:
             raise ActivationCancelled(
@@ -350,7 +356,7 @@ class OnlineSimProvider(BaseSmsProvider):
             )
         return code
 
-    def wait_code(
+    async def wait_code(
         self,
         activation_id: str,
         *,
@@ -360,19 +366,19 @@ class OnlineSimProvider(BaseSmsProvider):
         activation_id = str(activation_id)
         resolved_timeout = timeout if timeout is not None else self.default_timeout
         resolved_interval = poll_interval if poll_interval is not None else self.poll_interval
-        return self._poll(
+        return await self._poll(
             lambda: self.get_code(activation_id),
             timeout=resolved_timeout,
             interval=resolved_interval,
         )
 
-    def request_retry(self, activation_id: str) -> None:
-        self._request("setOperationRevise", tzid=str(activation_id))
+    async def request_retry(self, activation_id: str) -> None:
+        await self._request("setOperationRevise", tzid=str(activation_id))
 
-    def finish(self, activation_id: str) -> None:
-        self._request("setOperationOk", tzid=str(activation_id))
+    async def finish(self, activation_id: str) -> None:
+        await self._request("setOperationOk", tzid=str(activation_id))
 
-    def cancel(self, activation_id: str) -> None:
+    async def cancel(self, activation_id: str) -> None:
         """Best-effort cancel: OnlineSim has no dedicated cancel endpoint.
 
         The single-service-activation API only exposes ``getTariffs``,
@@ -387,9 +393,9 @@ class OnlineSimProvider(BaseSmsProvider):
 
         # TODO(v0.2): verify cancel() refund semantics on a live operation
         """
-        self._request("setOperationOk", tzid=str(activation_id))
+        await self._request("setOperationOk", tzid=str(activation_id))
 
-    def get_messages(self, activation_id: str) -> list[Any]:
+    async def get_messages(self, activation_id: str) -> list[Any]:
         """Return the raw list of SMS messages for the activation (full text included).
 
         Unlike :meth:`get_code`/:meth:`wait_code`, which use
@@ -397,7 +403,7 @@ class OnlineSimProvider(BaseSmsProvider):
         this uses ``msg_list=1&message_to_code=0`` to retrieve the message(s)
         exactly as the API returns them.
         """
-        data = self._request(
+        data = await self._request(
             "getState", tzid=str(activation_id), msg_list=1, message_to_code=0
         )
         if not isinstance(data, list) or not data:
@@ -416,14 +422,14 @@ class OnlineSimProvider(BaseSmsProvider):
 
     # --- discovery ---
 
-    def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(self, country: str | int | None = None) -> list[Service]:
         """Services available from OnlineSim; optionally narrow by country.
 
         There is no dedicated services endpoint - this reads the ``services``
         key of ``getTariffs.php``, the same call used by :meth:`get_countries`.
         ``name`` is localized by the constructor's ``lang`` (default ``"en"``).
         """
-        data = self._request("getTariffs", country=country)
+        data = await self._request("getTariffs", country=country)
         services = self._tariffs_section(data, "services")
         result = []
         for key, item in services.items():
@@ -444,7 +450,7 @@ class OnlineSimProvider(BaseSmsProvider):
             )
         return result
 
-    def get_countries(self) -> list[Country]:
+    async def get_countries(self) -> list[Country]:
         """Countries available from OnlineSim.
 
         There is no dedicated countries endpoint - this reads the
@@ -452,7 +458,7 @@ class OnlineSimProvider(BaseSmsProvider):
         :meth:`get_services`. ``name`` is localized by the constructor's
         ``lang`` (default ``"en"``).
         """
-        data = self._request("getTariffs")
+        data = await self._request("getTariffs")
         countries = self._tariffs_section(data, "countries")
         result = []
         for key, item in countries.items():

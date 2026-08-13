@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any, ClassVar, TypeVar
 
@@ -64,16 +65,19 @@ class SmsProviderManager:
     def names(self) -> list[str]:
         return list(self._providers)
 
-    def close_all(self) -> None:
-        errors: list[tuple[str, Exception]] = []
-        for name, provider in self._providers.items():
-            try:
-                provider.close()
-            except Exception as exc:  # noqa: BLE001 - collected and re-raised below
-                errors.append((name, exc))
+    async def aclose_all(self) -> None:
+        names = list(self._providers)
+        results = await asyncio.gather(
+            *(self._providers[name].aclose() for name in names), return_exceptions=True
+        )
+        errors = [
+            (name, result)
+            for name, result in zip(names, results, strict=True)
+            if isinstance(result, Exception)
+        ]
         if errors:
-            names = ", ".join(name for name, _ in errors)
-            raise RuntimeError(f"failed to close provider(s): {names}") from errors[0][1]
+            failed_names = ", ".join(name for name, _ in errors)
+            raise RuntimeError(f"failed to close provider(s): {failed_names}") from errors[0][1]
 
     # --- classes ---
 

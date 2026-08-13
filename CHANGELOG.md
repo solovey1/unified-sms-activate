@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `verificationType` 1/2 (call / voice verification) support in
   `SmsActivateCompatibleProvider`.
 - Verify `OnlineSimProvider.cancel()` refund semantics on a live operation.
+- Optional generated sync facade (unasync) if demand appears.
 
 ## [0.1.0] - 2026-08-12
 
@@ -33,3 +34,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Discovery: `get_services()`/`get_countries()` on `BaseSmsProvider` (opt-in,
   raise `NotImplementedError` by default), with `Service`/`Country` DTOs,
   implemented for `SmsActivateCompatibleProvider` and `OnlineSimProvider`.
+- Async-first API built on `httpx.AsyncClient`.

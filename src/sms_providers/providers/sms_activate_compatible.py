@@ -134,7 +134,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         max_retries: int = 2,
         min_request_interval: float = 0.0,
         extra_params: Mapping[str, Any] | None = None,
-        client: httpx.Client | None = None,
+        client: httpx.AsyncClient | None = None,
         proxy: str | None = None,
     ) -> None:
         if not api_key:
@@ -162,20 +162,20 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, base_url={self.base_url!r})"
 
-    def close(self) -> None:
+    async def aclose(self) -> None:
         if self._owns_client:
-            self._client.close()
+            await self._client.aclose()
 
     # --- transport ---
 
-    def _request(self, action: str, **params: Any) -> str | dict[str, Any] | list[Any]:
+    async def _request(self, action: str, **params: Any) -> str | dict[str, Any] | list[Any]:
         query = {
             self.api_key_param: self._api_key,
             self.action_param: action,
             **self.extra_params,
             **{k: v for k, v in params.items() if v is not None},
         }
-        response = request_with_retry(
+        response = await request_with_retry(
             client=self._client,
             url=self.base_url,
             params=query,
@@ -224,8 +224,8 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
 
     # --- public API ---
 
-    def get_balance(self) -> Decimal:
-        body = self._request("getBalance")
+    async def get_balance(self) -> Decimal:
+        body = await self._request("getBalance")
         parts = self._expect_prefix(body, "ACCESS_BALANCE")
         if not parts:
             raise ProviderAPIError(
@@ -238,7 +238,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
                 f"unexpected balance value: {parts[0]!r}", provider=self.name, raw=body
             ) from exc
 
-    def get_number(
+    async def get_number(
         self,
         service: str,
         country: str | int | None = None,
@@ -248,7 +248,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         **extra: Any,
     ) -> PhoneNumber:
         country_value = country if country is not None else self.default_country
-        body = self._request(
+        body = await self._request(
             "getNumber",
             service=service,
             country=country_value,
@@ -271,13 +271,13 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             raw={"body": body},
         )
 
-    def get_status(self, activation_id: str) -> ActivationStatus:
-        response = self._request("getStatus", id=str(activation_id))
+    async def get_status(self, activation_id: str) -> ActivationStatus:
+        response = await self._request("getStatus", id=str(activation_id))
         status, _code = self._parse_status(response)
         return status
 
-    def get_code(self, activation_id: str) -> SmsCode | None:
-        response = self._request("getStatus", id=str(activation_id))
+    async def get_code(self, activation_id: str) -> SmsCode | None:
+        response = await self._request("getStatus", id=str(activation_id))
         status, code = self._parse_status(response)
         if status is ActivationStatus.CANCELLED:
             raise ActivationCancelled(
@@ -287,7 +287,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             )
         return code
 
-    def wait_code(
+    async def wait_code(
         self,
         activation_id: str,
         *,
@@ -297,26 +297,26 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         activation_id = str(activation_id)
         resolved_timeout = timeout if timeout is not None else self.default_timeout
         resolved_interval = poll_interval if poll_interval is not None else self.poll_interval
-        return self._poll(
+        return await self._poll(
             lambda: self.get_code(activation_id),
             timeout=resolved_timeout,
             interval=resolved_interval,
         )
 
-    def request_retry(self, activation_id: str) -> None:
-        body = self._request("setStatus", id=str(activation_id), status=3)
+    async def request_retry(self, activation_id: str) -> None:
+        body = await self._request("setStatus", id=str(activation_id), status=3)
         if body == "":  # HTTP 204 empty body - success
             return
         self._expect_prefix(body, "ACCESS_RETRY_GET")
 
-    def finish(self, activation_id: str) -> None:
-        body = self._request("setStatus", id=str(activation_id), status=6)
+    async def finish(self, activation_id: str) -> None:
+        body = await self._request("setStatus", id=str(activation_id), status=6)
         if body == "":  # HTTP 204 empty body - success
             return
         self._expect_prefix(body, "ACCESS_ACTIVATION")
 
-    def cancel(self, activation_id: str) -> None:
-        body = self._request("setStatus", id=str(activation_id), status=8)
+    async def cancel(self, activation_id: str) -> None:
+        body = await self._request("setStatus", id=str(activation_id), status=8)
         if body == "":  # HTTP 204 empty body - success
             return
         self._expect_prefix(body, "ACCESS_CANCEL")
@@ -328,9 +328,9 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
     #: action here", as opposed to a real error that should propagate unchanged.
     _UNSUPPORTED_ACTION_CODES = frozenset({"BAD_ACTION", "ACTION_NOT_AVAILABLE"})
 
-    def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(self, country: str | int | None = None) -> list[Service]:
         try:
-            data = self._request("getServicesList", country=country)
+            data = await self._request("getServicesList", country=country)
         except ProviderAPIError as exc:
             if exc.code in self._UNSUPPORTED_ACTION_CODES:
                 raise NotImplementedError(
@@ -351,9 +351,9 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             result.append(Service(code=str(item["code"]), name=item.get("name"), raw=item))
         return result
 
-    def get_countries(self) -> list[Country]:
+    async def get_countries(self) -> list[Country]:
         try:
-            data = self._request("getCountries")
+            data = await self._request("getCountries")
         except ProviderAPIError as exc:
             if exc.code in self._UNSUPPORTED_ACTION_CODES:
                 raise NotImplementedError(f"{self.name} does not support getCountries") from exc

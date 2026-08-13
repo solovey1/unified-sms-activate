@@ -14,25 +14,25 @@ class _RecordingProvider(BaseSmsProvider):
         self.kwargs = kwargs
         self.closed = False
 
-    def get_balance(self):
+    async def get_balance(self):
         raise NotImplementedError
 
-    def get_number(self, service, country=None, **options):
+    async def get_number(self, service, country=None, **options):
         raise NotImplementedError
 
-    def get_status(self, activation_id):
+    async def get_status(self, activation_id):
         raise NotImplementedError
 
-    def wait_code(self, activation_id, *, timeout=None, poll_interval=None):
+    async def wait_code(self, activation_id, *, timeout=None, poll_interval=None):
         raise NotImplementedError
 
-    def cancel(self, activation_id):
+    async def cancel(self, activation_id):
         raise NotImplementedError
 
-    def finish(self, activation_id):
+    async def finish(self, activation_id):
         raise NotImplementedError
 
-    def close(self):
+    async def aclose(self):
         self.closed = True
 
 
@@ -159,7 +159,7 @@ def test_from_config_wraps_constructor_typeerror_as_valueerror():
 
 
 # from_config with the real built-in provider classes, including the "provider" alias
-def test_from_config_with_real_provider_classes():
+async def test_from_config_with_real_provider_classes():
     manager = SmsProviderManager.from_config(
         {
             "hero-sms": {"api_key": "test-key"},
@@ -171,16 +171,16 @@ def test_from_config_with_real_provider_classes():
     assert isinstance(manager["online-sim"], OnlineSimProvider)
     assert isinstance(manager["hero-backup"], HeroSmsProvider)
     assert manager["hero-backup"] is not manager["hero-sms"]
-    manager.close_all()
+    await manager.aclose_all()
 
 
-# 43. close_all closes every registered provider
-def test_close_all_closes_every_provider():
+# 43. aclose_all closes every registered provider
+async def test_close_all_closes_every_provider():
     manager = SmsProviderManager()
     first = _RecordingProvider()
     second = _RecordingProvider()
     manager.register_provider("p1", first)
     manager.register_provider("p2", second)
-    manager.close_all()
+    await manager.aclose_all()
     assert first.closed
     assert second.closed

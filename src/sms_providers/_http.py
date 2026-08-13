@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -15,18 +16,18 @@ DEFAULT_USER_AGENT = f"sms-providers/{__version__} (+https://github.com/solovey1
 
 
 def build_client(
-    *, timeout: float, client: httpx.Client | None = None, proxy: str | None = None
-) -> tuple[httpx.Client, bool]:
+    *, timeout: float, client: httpx.AsyncClient | None = None, proxy: str | None = None
+) -> tuple[httpx.AsyncClient, bool]:
     """Return ``(client, owns_client)``.
 
     If a client was passed in, it is reused as-is and ``owns_client`` is
-    ``False`` — the caller must not close it in its own ``close()``. ``proxy``
+    ``False`` — the caller must not close it in its own ``aclose()``. ``proxy``
     is only used when this function builds the client itself.
     """
     if client is not None:
         return client, False
     return (
-        httpx.Client(
+        httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
             headers={"User-Agent": DEFAULT_USER_AGENT},
             follow_redirects=True,
@@ -42,23 +43,23 @@ class Throttle:
     def __init__(self, min_interval: float) -> None:
         self._min_interval = min_interval
         self._last_call: float | None = None
+        self._lock = asyncio.Lock()
 
-    def wait(self) -> None:
+    async def wait(self) -> None:
         if self._min_interval <= 0:
-            self._last_call = time.monotonic()
             return
-        now = time.monotonic()
-        if self._last_call is not None:
-            elapsed = now - self._last_call
-            remaining = self._min_interval - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-        self._last_call = time.monotonic()
+        async with self._lock:
+            now = time.monotonic()
+            if self._last_call is not None:
+                remaining = self._min_interval - (now - self._last_call)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            self._last_call = time.monotonic()
 
 
-def request_with_retry(
+async def request_with_retry(
     *,
-    client: httpx.Client,
+    client: httpx.AsyncClient,
     url: str,
     params: Mapping[str, Any],
     max_retries: int,
@@ -75,9 +76,9 @@ def request_with_retry(
     last_error: BaseException | httpx.Response | None = None
     for attempt in range(max_retries + 1):
         if throttle is not None:
-            throttle.wait()
+            await throttle.wait()
         try:
-            response = client.get(url, params=params)
+            response = await client.get(url, params=params)
         except httpx.TransportError as exc:
             last_error = exc
         else:
@@ -86,7 +87,7 @@ def request_with_retry(
             else:
                 return response
         if attempt < max_retries:
-            time.sleep(retry_backoff * (2**attempt))
+            await asyncio.sleep(retry_backoff * (2**attempt))
     raise ProviderUnavailable(
         f"request failed after {max_retries + 1} attempt(s)",
         provider=provider_name,

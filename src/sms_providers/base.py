@@ -7,9 +7,10 @@ Defines the shared DTOs (:class:`PhoneNumber`, :class:`SmsCode`), the
 
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -248,6 +249,11 @@ class BaseSmsProvider(ABC):
        :class:`OperationNotAllowed` — never a bare transport exception.
     5. No API error ever leaks out as ``httpx.*``, ``ValueError``,
        ``KeyError``, or ``json.JSONDecodeError``.
+    6. ``asyncio.CancelledError`` is never swallowed and never turned into a
+       :class:`SmsProviderError`. Cancelling a task awaiting ``wait_code()``
+       does NOT cancel the activation on the service's side — closing it is
+       the caller's responsibility (``try/finally`` with
+       ``await provider.cancel(...)``).
     """
 
     name: ClassVar[str] = ""
@@ -255,18 +261,18 @@ class BaseSmsProvider(ABC):
     default_timeout: ClassVar[float] = 300.0
 
     @abstractmethod
-    def get_balance(self) -> Decimal: ...
+    async def get_balance(self) -> Decimal: ...
 
     @abstractmethod
-    def get_number(
+    async def get_number(
         self, service: str, country: str | int | None = None, **options: Any
     ) -> PhoneNumber: ...
 
     @abstractmethod
-    def get_status(self, activation_id: str) -> ActivationStatus: ...
+    async def get_status(self, activation_id: str) -> ActivationStatus: ...
 
     @abstractmethod
-    def wait_code(
+    async def wait_code(
         self,
         activation_id: str,
         *,
@@ -275,20 +281,20 @@ class BaseSmsProvider(ABC):
     ) -> SmsCode: ...
 
     @abstractmethod
-    def cancel(self, activation_id: str) -> None: ...
+    async def cancel(self, activation_id: str) -> None: ...
 
     @abstractmethod
-    def finish(self, activation_id: str) -> None: ...
+    async def finish(self, activation_id: str) -> None: ...
 
-    def request_retry(self, activation_id: str) -> None:
+    async def request_retry(self, activation_id: str) -> None:
         """Request the next SMS on the same number."""
         raise NotImplementedError(f"{type(self).__name__} does not support request_retry()")
 
-    def get_code(self, activation_id: str) -> SmsCode | None:
+    async def get_code(self, activation_id: str) -> SmsCode | None:
         """Non-blocking check for a code. ``None`` means no code yet."""
         raise NotImplementedError
 
-    def get_services(self, country: str | int | None = None) -> list[Service]:
+    async def get_services(self, country: str | int | None = None) -> list[Service]:
         """Services available from this provider; optionally narrow by country.
 
         An empty list is a valid result, not an error. Element order follows
@@ -296,7 +302,7 @@ class BaseSmsProvider(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not support get_services()")
 
-    def get_countries(self) -> list[Country]:
+    async def get_countries(self) -> list[Country]:
         """Countries available from this provider.
 
         An empty list is a valid result, not an error. Element order follows
@@ -304,35 +310,35 @@ class BaseSmsProvider(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not support get_countries()")
 
-    def close(self) -> None: ...
+    async def aclose(self) -> None: ...
 
-    def __enter__(self) -> BaseSmsProvider:  # noqa: PYI034 - typing.Self needs py3.11+
+    async def __aenter__(self) -> BaseSmsProvider:  # noqa: PYI034 - typing.Self needs py3.11+
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r})"
 
-    def _poll(
-        self, fetch: Callable[[], T | None], *, timeout: float, interval: float
+    async def _poll(
+        self, fetch: Callable[[], Awaitable[T | None]], *, timeout: float, interval: float
     ) -> T:
         """Call ``fetch()`` until it returns a non-``None`` result.
 
         The first ``fetch()`` happens immediately, without sleeping. After
         that, the deadline (``time.monotonic()``) is checked before each
-        ``time.sleep(interval)`` so the last attempt never sleeps needlessly.
+        ``asyncio.sleep(interval)`` so the last attempt never sleeps needlessly.
         Raises :class:`ActivationTimeout` once the deadline passes.
         """
         deadline = time.monotonic() + timeout
-        result = fetch()
+        result = await fetch()
         if result is not None:
             return result
         while True:
             if time.monotonic() >= deadline:
                 raise ActivationTimeout(f"{type(self).__name__}: wait_code timed out")
-            time.sleep(interval)
-            result = fetch()
+            await asyncio.sleep(interval)
+            result = await fetch()
             if result is not None:
                 return result

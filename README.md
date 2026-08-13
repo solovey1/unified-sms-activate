@@ -9,6 +9,9 @@ a provider. Ships with clients for [HeroSMS](https://hero-sms.com) and
 [OnlineSim](https://onlinesim.io), plus a base class for any service that
 speaks the sms-activate `handler_api.php` protocol.
 
+The package is async-only, built on `httpx.AsyncClient`; a generated
+sync facade is planned on demand — see CHANGELOG.
+
 ## Installation
 
 ```bash
@@ -18,14 +21,18 @@ pip install sms-providers
 ## Quickstart
 
 ```python
+import asyncio
 from sms_providers.providers import HeroSmsProvider
 
-with HeroSmsProvider(api_key="...") as provider:
-    number = provider.get_number(service="tg", country=0)
-    print(number.phone)
-    code = provider.wait_code(number.id, timeout=180)
-    print(code.code)
-    provider.finish(number.id)
+async def main() -> None:
+    async with HeroSmsProvider(api_key="...") as provider:
+        number = await provider.get_number(service="tg", country=0)
+        print(number.phone)
+        code = await provider.wait_code(number.id, timeout=180)
+        print(code.code)
+        await provider.finish(number.id)
+
+asyncio.run(main())
 ```
 
 ## Supported services
@@ -41,7 +48,7 @@ stale faster than releases ship. Consult each provider's own documentation
 for its codes, or discover them at runtime:
 
 ```python
-for service in provider.get_services():
+for service in await provider.get_services():
     print(service.code, service.name)
 ```
 
@@ -74,8 +81,9 @@ from the vanilla protocol, override `extra_error_map` / `extra_status_map`
 
 ### Fully custom protocol
 
-Subclass `BaseSmsProvider` directly and implement its six abstract methods,
-raising the package's exceptions instead of leaking transport/JSON errors:
+Subclass `BaseSmsProvider` directly and implement its six abstract methods
+as `async def`, raising the package's exceptions instead of leaking
+transport/JSON errors:
 
 ```python
 from decimal import Decimal
@@ -87,12 +95,12 @@ class MyProvider(BaseSmsProvider):
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
-    def get_balance(self) -> Decimal: ...
-    def get_number(self, service: str, country=None, **options) -> PhoneNumber: ...
-    def get_status(self, activation_id: str) -> ActivationStatus: ...
-    def wait_code(self, activation_id: str, *, timeout=None, poll_interval=None) -> SmsCode: ...
-    def cancel(self, activation_id: str) -> None: ...
-    def finish(self, activation_id: str) -> None: ...
+    async def get_balance(self) -> Decimal: ...
+    async def get_number(self, service: str, country=None, **options) -> PhoneNumber: ...
+    async def get_status(self, activation_id: str) -> ActivationStatus: ...
+    async def wait_code(self, activation_id: str, *, timeout=None, poll_interval=None) -> SmsCode: ...
+    async def cancel(self, activation_id: str) -> None: ...
+    async def finish(self, activation_id: str) -> None: ...
     # get_services()/get_countries() are optional - the base class already
     # raises NotImplementedError for both, override only if your API supports them.
 
@@ -120,9 +128,9 @@ manager = SmsProviderManager.from_config({
 })
 
 provider = manager["hero-sms"]
-number = provider.get_number(service="tg")
+number = await provider.get_number(service="tg")
 ...
-manager.close_all()
+await manager.aclose_all()
 ```
 
 Registering a class (built-in or your own) is done with the
