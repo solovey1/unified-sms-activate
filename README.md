@@ -44,6 +44,11 @@ asyncio.run(main())
   pass a mirror via `base_url=` if the default host times out.
 - **VAK SMS** (`sms_providers.providers.VakSmsProvider`) - sms-activate-compatible.
 - **OnlineSim** (`sms_providers.providers.OnlineSimProvider`) - own protocol.
+- **Spanch SMS** (`sms_providers.providers.SpanchSmsProvider`) - own protocol.
+  `country` is a two-letter ISO code (`"RU"`), not numeric like the other
+  providers. `gateway` is required for `get_number()` and has no default -
+  pass `gateway=` per call or `default_gateway=` in the constructor; see
+  `get_gateways()` for the current list.
 
 `PhoneNumber.country_phone_code` (the E.164 phone prefix, no `+`) is only
 filled in for sms-activate-compatible providers when `use_get_number_v2 =
@@ -265,6 +270,8 @@ All exceptions raised by providers subclass `SmsProviderError`.
 - Automatic discovery of third-party providers via `entry_points`
   (`sms_providers.providers` group) is deferred to 0.2.0; register your
   provider explicitly for now (see "Adding your own service").
+- `SpanchSmsProvider` does not support rental or email-verification
+  activations (only regular SMS activations, v1 scope).
 - No normalization of service/country codes between providers - each
   provider's codes are its own, native ones.
 

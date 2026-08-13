@@ -277,6 +277,10 @@ class BaseSmsProvider(ABC):
     4. Calling ``cancel()``/``finish()`` again on an already-closed
        activation raises :class:`ActivationNotFound` or
        :class:`OperationNotAllowed` — never a bare transport exception.
+       Documented exception: providers with no completion endpoint of their
+       own (``SpanchSmsProvider`` — an order closes itself once the code
+       arrives) implement ``finish()`` as a no-op, so repeated calls there
+       never raise anything.
     5. No API error ever leaks out as ``httpx.*``, ``ValueError``,
        ``KeyError``, or ``json.JSONDecodeError``.
     6. ``asyncio.CancelledError`` is never swallowed and never turned into a

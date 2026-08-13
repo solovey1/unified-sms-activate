@@ -54,3 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `find_service(name, country=None)` on `BaseSmsProvider` - looks up a
   service by code or name, tolerating a trailing domain suffix
   (e.g. `"bybit"` matches a `"bybit.com"` listing).
+- `SpanchSmsProvider` (spanch-projects.com) - own protocol; requires
+  `gateway=`/`default_gateway=` for `get_number()`, adds a provider-specific
+  `get_gateways()`/`get_prices()`.
