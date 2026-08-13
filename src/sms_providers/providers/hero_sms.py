@@ -24,6 +24,8 @@ class HeroSmsProvider(SmsActivateCompatibleProvider):
       portability across sms-activate-compatible clones.
     * Authorization: api_key in the query (used here) or the
       Authorization: ApiKey <token> header.
+    * getServicesList (get_services()) accepts optional country and lang
+      query parameters; getCountries (get_countries()) takes none.
     """
 
     name = "hero-sms"

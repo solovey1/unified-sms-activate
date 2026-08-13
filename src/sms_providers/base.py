@@ -25,6 +25,7 @@ __all__ = [
     "ActivationStatus",
     "ActivationTimeout",
     "BaseSmsProvider",
+    "Country",
     "InsufficientBalance",
     "InvalidApiKey",
     "NoNumbersAvailable",
@@ -34,6 +35,7 @@ __all__ = [
     "ProviderNotRegistered",
     "ProviderUnavailable",
     "RateLimited",
+    "Service",
     "SmsCode",
     "SmsProviderError",
 ]
@@ -93,6 +95,46 @@ class SmsCode:
     received_at: datetime | None = None
     raw: Mapping[str, Any] = field(default_factory=dict)
     """Escape hatch: the provider's raw response for this call."""
+
+    def __str__(self) -> str:
+        return self.code
+
+
+@dataclass(frozen=True, slots=True)
+class Service:
+    """A service offered by a provider, as returned by discovery.
+
+    ``code`` is exactly the value :meth:`BaseSmsProvider.get_number` accepts
+    as its ``service`` argument for this same provider - discovery unifies
+    the SHAPE of the listing, not the codes themselves; there is still no
+    normalization between providers.
+    """
+
+    code: str
+    name: str | None = None
+    count: int | None = None
+    """Numbers currently available for this service, if the provider reports it."""
+    price: Decimal | None = None
+    """Activation price, if the provider reports it."""
+    raw: Mapping[str, Any] = field(default_factory=dict)
+    """Escape hatch: the provider's raw response for this entry."""
+
+    def __str__(self) -> str:
+        return self.code
+
+
+@dataclass(frozen=True, slots=True)
+class Country:
+    """A country offered by a provider, as returned by discovery.
+
+    ``code`` is exactly the value :meth:`BaseSmsProvider.get_number` accepts
+    as its ``country`` argument for this same provider.
+    """
+
+    code: str
+    name: str | None = None
+    raw: Mapping[str, Any] = field(default_factory=dict)
+    """Escape hatch: the provider's raw response for this entry."""
 
     def __str__(self) -> str:
         return self.code
@@ -245,6 +287,22 @@ class BaseSmsProvider(ABC):
     def get_code(self, activation_id: str) -> SmsCode | None:
         """Non-blocking check for a code. ``None`` means no code yet."""
         raise NotImplementedError
+
+    def get_services(self, country: str | int | None = None) -> list[Service]:
+        """Services available from this provider; optionally narrow by country.
+
+        An empty list is a valid result, not an error. Element order follows
+        the API's own order; results are never sorted or de-duplicated.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_services()")
+
+    def get_countries(self) -> list[Country]:
+        """Countries available from this provider.
+
+        An empty list is a valid result, not an error. Element order follows
+        the API's own order; results are never sorted or de-duplicated.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_countries()")
 
     def close(self) -> None: ...
 

@@ -8,7 +8,9 @@ from sms_providers.base import (
     ActivationStatus,
     ActivationTimeout,
     BaseSmsProvider,
+    Country,
     PhoneNumber,
+    Service,
     SmsCode,
 )
 
@@ -100,3 +102,34 @@ def test_phone_number_str_and_sms_code_str():
 def test_dto_raw_defaults_to_empty_dict():
     assert PhoneNumber(id="1", phone="1", provider="dummy").raw == {}
     assert SmsCode(code="1").raw == {}
+
+
+# 47. Service/Country are immutable, str(x) == x.code, raw defaults to {}.
+def test_service_and_country_are_frozen():
+    service = Service(code="tg")
+    with pytest.raises(FrozenInstanceError):
+        service.code = "wa"  # type: ignore[misc]
+
+    country = Country(code="7")
+    with pytest.raises(FrozenInstanceError):
+        country.code = "1"  # type: ignore[misc]
+
+
+def test_service_and_country_str_is_code():
+    assert str(Service(code="tg")) == "tg"
+    assert str(Country(code="7")) == "7"
+
+
+def test_service_and_country_raw_defaults_to_empty_dict():
+    assert Service(code="tg").raw == {}
+    assert Country(code="7").raw == {}
+
+
+# 48. A provider that doesn't override get_services/get_countries raises
+# NotImplementedError on both.
+def test_get_services_and_get_countries_raise_not_implemented_by_default():
+    provider = _Dummy()
+    with pytest.raises(NotImplementedError):
+        provider.get_services()
+    with pytest.raises(NotImplementedError):
+        provider.get_countries()

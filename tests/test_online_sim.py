@@ -275,3 +275,111 @@ def test_proxy_and_client_together_raises_value_error():
             proxy="http://secret-user:secret-pass@127.0.0.1:8080",
         )
     assert "secret-pass" not in str(exc_info.value)
+
+
+# 55. get_services on a live getTariffs response -> Service with count/price parsed;
+# an element with no "slug" falls back to the dict key without its leading "_"
+def test_get_services_from_live_tariffs_response():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "countries": {},
+                "services": {
+                    "_vkcom": {
+                        "id": 1,
+                        "count": 9839,
+                        "price": "1.00",
+                        "service": "ВКонтакте + Mail.ru",
+                        "slug": "vkcom",
+                    },
+                    "_3223": {
+                        "id": 2,
+                        "count": 5,
+                        "price": "2.50",
+                        "service": "Other",
+                    },
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    services = provider.get_services()
+    assert len(services) == 2
+    first = next(s for s in services if s.code == "vkcom")
+    assert first.name == "ВКонтакте + Mail.ru"
+    assert first.count == 9839
+    assert first.price == Decimal("1.00")
+    second = next(s for s in services if s.code == "3223")
+    assert second.price == Decimal("2.50")
+
+
+# 56. get_services(country=49) hits getTariffs.php with country=49
+def test_get_services_puts_country_in_query():
+    recorder = responses(
+        httpx.Response(200, json={"response": "1", "services": {}, "countries": {}})
+    )
+    provider = make_provider(recorder)
+    provider.get_services(country=49)
+    request = recorder.requests[0]
+    assert "getTariffs.php" in str(request.url)
+    assert request.url.params["country"] == "49"
+
+
+# 57. "services": {} -> [] without an exception (real case: country=7)
+def test_get_services_empty_dict_returns_empty_list():
+    recorder = responses(
+        httpx.Response(200, json={"response": "1", "services": {}, "countries": {}})
+    )
+    provider = make_provider(recorder)
+    assert provider.get_services() == []
+
+
+# 58. get_countries -> Country(code="49", name="Германия"), "original" stays in raw
+def test_get_countries_from_live_tariffs_response():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "response": "1",
+                "services": {},
+                "countries": {
+                    "_49": {
+                        "name": "Германия",
+                        "original": "germany",
+                        "code": 49,
+                        "pos": 0,
+                        "other": False,
+                        "new": False,
+                        "enable": True,
+                    },
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    countries = provider.get_countries()
+    assert len(countries) == 1
+    assert countries[0].code == "49"
+    assert countries[0].name == "Германия"
+    assert countries[0].raw["original"] == "germany"
+
+
+# 59. missing "services"/"countries" keys -> []
+def test_get_services_and_get_countries_missing_keys_return_empty_list():
+    recorder = responses(httpx.Response(200, json={"response": "1"}))
+    provider = make_provider(recorder)
+    assert provider.get_services() == []
+
+    recorder2 = responses(httpx.Response(200, json={"response": "1"}))
+    provider2 = make_provider(recorder2)
+    assert provider2.get_countries() == []
+
+
+# 60. {"response":"ERROR_WRONG_KEY"} on getTariffs -> InvalidApiKey
+def test_get_services_wrong_key_raises_invalid_api_key():
+    recorder = responses(httpx.Response(200, json={"response": "ERROR_WRONG_KEY"}))
+    provider = make_provider(recorder)
+    with pytest.raises(InvalidApiKey):
+        provider.get_services()

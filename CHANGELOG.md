@@ -30,3 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OnlineSimProvider` — dedicated client for the OnlineSim API.
 - `proxy` constructor parameter on `SmsActivateCompatibleProvider` and
   `OnlineSimProvider` for routing requests through an HTTP(S)/SOCKS proxy.
+- Discovery: `get_services()`/`get_countries()` on `BaseSmsProvider` (opt-in,
+  raise `NotImplementedError` by default), with `Service`/`Country` DTOs,
+  implemented for `SmsActivateCompatibleProvider` and `OnlineSimProvider`.

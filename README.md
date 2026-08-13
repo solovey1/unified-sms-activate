@@ -38,7 +38,15 @@ through untouched to each provider's native API. The package does **not**
 normalize service/country codes between providers (e.g. HeroSMS's `tg` vs.
 another provider's own code for Telegram) - such a mapping table would go
 stale faster than releases ship. Consult each provider's own documentation
-for its codes.
+for its codes, or discover them at runtime:
+
+```python
+for service in provider.get_services():
+    print(service.code, service.name)
+```
+
+`Service.code`/`Country.code` are exactly the values `get_number()` accepts
+for `service=`/`country=` on that same provider.
 
 ## Adding your own service
 
@@ -85,6 +93,8 @@ class MyProvider(BaseSmsProvider):
     def wait_code(self, activation_id: str, *, timeout=None, poll_interval=None) -> SmsCode: ...
     def cancel(self, activation_id: str) -> None: ...
     def finish(self, activation_id: str) -> None: ...
+    # get_services()/get_countries() are optional - the base class already
+    # raises NotImplementedError for both, override only if your API supports them.
 
 # register without touching sms_providers itself:
 SmsProviderManager.register("my-service")(MyProvider)

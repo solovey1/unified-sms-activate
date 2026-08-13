@@ -17,6 +17,7 @@ from sms_providers.base import (
     NoNumbersAvailable,
     OperationNotAllowed,
     PhoneNumber,
+    ProviderAPIError,
     ProviderUnavailable,
     RateLimited,
 )
@@ -414,3 +415,118 @@ def test_proxy_and_client_together_raises_value_error():
             proxy="http://secret-user:secret-pass@127.0.0.1:8080",
         )
     assert "secret-pass" not in str(exc_info.value)
+
+
+# 49. get_services on {"status":"success","services":[...]} -> two Service, order preserved
+def test_get_services_returns_services_in_order():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "services": [
+                    {"code": "tg", "name": "Telegram"},
+                    {"code": "wa", "name": "Whatsapp"},
+                ],
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    services = provider.get_services()
+    assert [s.code for s in services] == ["tg", "wa"]
+    assert services[0].name == "Telegram"
+    assert services[1].name == "Whatsapp"
+
+
+# 50. get_services(country=0) puts country in query, action is getServicesList
+def test_get_services_puts_country_in_query():
+    recorder = responses(httpx.Response(200, json={"status": "success", "services": []}))
+    provider = make_provider(recorder)
+    provider.get_services(country=0)
+    params = recorder.requests[0].url.params
+    assert params["action"] == "getServicesList"
+    assert params["country"] == "0"
+
+
+# 51. get_services at {"status":"false"} -> ProviderAPIError
+def test_get_services_status_not_success_raises_provider_api_error():
+    recorder = responses(httpx.Response(200, json={"status": "false"}))
+    provider = make_provider(recorder)
+    with pytest.raises(ProviderAPIError):
+        provider.get_services()
+
+
+# 52. get_countries on the live dict-keyed form -> Country(code="1", name="Ukraine")
+def test_get_countries_dict_form():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "1": {
+                    "id": 1,
+                    "rus": "Украина",
+                    "eng": "Ukraine",
+                    "chn": "...",
+                    "visible": 1,
+                    "retry": 1,
+                    "rent": 1,
+                    "multiService": 0,
+                },
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    countries = provider.get_countries()
+    assert len(countries) == 1
+    assert countries[0].code == "1"
+    assert countries[0].name == "Ukraine"
+    assert countries[0].raw["visible"] == 1
+    assert countries[0].raw["retry"] == 1
+
+
+# 53. get_countries on the OpenAPI list form -> Country(code="2", name="Kazakhstan")
+def test_get_countries_list_form():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json=[
+                {"id": 2, "rus": "Казахстан", "eng": "Kazakhstan", "chn": "...", "visible": 1,
+                 "retry": 1},
+            ],
+        )
+    )
+    provider = make_provider(recorder)
+    countries = provider.get_countries()
+    assert len(countries) == 1
+    assert countries[0].code == "2"
+    assert countries[0].name == "Kazakhstan"
+
+
+# 54. BAD_ACTION (plain text or JSON) on either method -> NotImplementedError;
+# plain BAD_KEY stays InvalidApiKey, not NotImplementedError
+def test_get_services_bad_action_plain_text_raises_not_implemented():
+    recorder = responses(httpx.Response(200, text="BAD_ACTION"))
+    provider = make_provider(recorder)
+    with pytest.raises(NotImplementedError):
+        provider.get_services()
+
+
+def test_get_countries_bad_action_json_raises_not_implemented():
+    recorder = responses(httpx.Response(400, json={"title": "BAD_ACTION", "details": "no"}))
+    provider = make_provider(recorder)
+    with pytest.raises(NotImplementedError):
+        provider.get_countries()
+
+
+def test_get_services_bad_key_raises_invalid_api_key_not_not_implemented():
+    recorder = responses(httpx.Response(200, text="BAD_KEY"))
+    provider = make_provider(recorder)
+    with pytest.raises(InvalidApiKey):
+        provider.get_services()
+
+
+def test_get_countries_bad_key_raises_invalid_api_key_not_not_implemented():
+    recorder = responses(httpx.Response(200, text="BAD_KEY"))
+    provider = make_provider(recorder)
+    with pytest.raises(InvalidApiKey):
+        provider.get_countries()

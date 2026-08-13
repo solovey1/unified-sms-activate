@@ -16,6 +16,7 @@ from sms_providers.base import (
     ActivationStatus,
     ActivationTimeout,
     BaseSmsProvider,
+    Country,
     InsufficientBalance,
     InvalidApiKey,
     NoNumbersAvailable,
@@ -23,6 +24,7 @@ from sms_providers.base import (
     PhoneNumber,
     ProviderAPIError,
     RateLimited,
+    Service,
     SmsCode,
     SmsProviderError,
 )
@@ -411,3 +413,75 @@ class OnlineSimProvider(BaseSmsProvider):
         if msg:
             return [msg]
         return []
+
+    # --- discovery ---
+
+    def get_services(self, country: str | int | None = None) -> list[Service]:
+        """Services available from OnlineSim; optionally narrow by country.
+
+        There is no dedicated services endpoint - this reads the ``services``
+        key of ``getTariffs.php``, the same call used by :meth:`get_countries`.
+        ``name`` is localized by the constructor's ``lang`` (default ``"en"``).
+        """
+        data = self._request("getTariffs", country=country)
+        services = self._tariffs_section(data, "services")
+        result = []
+        for key, item in services.items():
+            if not isinstance(item, dict):
+                raise ProviderAPIError(
+                    f"unexpected service entry: {item!r}", provider=self.name, raw=data
+                )
+            slug = item.get("slug")
+            code = str(slug) if slug else key.lstrip("_")
+            result.append(
+                Service(
+                    code=code,
+                    name=item.get("service"),
+                    count=item.get("count"),
+                    price=self._parse_price(item.get("price")),
+                    raw=item,
+                )
+            )
+        return result
+
+    def get_countries(self) -> list[Country]:
+        """Countries available from OnlineSim.
+
+        There is no dedicated countries endpoint - this reads the
+        ``countries`` key of ``getTariffs.php``, the same call used by
+        :meth:`get_services`. ``name`` is localized by the constructor's
+        ``lang`` (default ``"en"``).
+        """
+        data = self._request("getTariffs")
+        countries = self._tariffs_section(data, "countries")
+        result = []
+        for key, item in countries.items():
+            if not isinstance(item, dict):
+                raise ProviderAPIError(
+                    f"unexpected country entry: {item!r}", provider=self.name, raw=data
+                )
+            country_code = item.get("code")
+            code = str(country_code) if country_code is not None else key.lstrip("_")
+            result.append(Country(code=code, name=item.get("name"), raw=item))
+        return result
+
+    def _tariffs_section(self, data: Any, key: str) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ProviderAPIError(
+                f"unexpected getTariffs response: {data!r}", provider=self.name, raw=data
+            )
+        section = data.get(key) or {}
+        if not isinstance(section, dict):
+            raise ProviderAPIError(
+                f"unexpected {key!r} value: {section!r}", provider=self.name, raw=data
+            )
+        return section
+
+    @staticmethod
+    def _parse_price(value: Any) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            return None

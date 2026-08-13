@@ -16,6 +16,7 @@ from sms_providers.base import (
     ActivationNotFound,
     ActivationStatus,
     BaseSmsProvider,
+    Country,
     InsufficientBalance,
     InvalidApiKey,
     NoNumbersAvailable,
@@ -24,6 +25,7 @@ from sms_providers.base import (
     ProviderAPIError,
     ProviderUnavailable,
     RateLimited,
+    Service,
     SmsCode,
     SmsProviderError,
 )
@@ -318,6 +320,65 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         if body == "":  # HTTP 204 empty body - success
             return
         self._expect_prefix(body, "ACCESS_CANCEL")
+
+    # --- discovery ---
+
+    #: getServicesList/getCountries exist on vanilla sms-activate and HeroSMS, but an
+    #: arbitrary clone may not implement them - these are the codes that mean "no such
+    #: action here", as opposed to a real error that should propagate unchanged.
+    _UNSUPPORTED_ACTION_CODES = frozenset({"BAD_ACTION", "ACTION_NOT_AVAILABLE"})
+
+    def get_services(self, country: str | int | None = None) -> list[Service]:
+        try:
+            data = self._request("getServicesList", country=country)
+        except ProviderAPIError as exc:
+            if exc.code in self._UNSUPPORTED_ACTION_CODES:
+                raise NotImplementedError(
+                    f"{self.name} does not support getServicesList"
+                ) from exc
+            raise
+        if not isinstance(data, dict) or data.get("status") != "success":
+            raise ProviderAPIError(
+                f"unexpected getServicesList response: {data!r}", provider=self.name, raw=data
+            )
+        services = data.get("services") or []
+        result = []
+        for item in services:
+            if not isinstance(item, dict) or "code" not in item:
+                raise ProviderAPIError(
+                    f"unexpected service entry: {item!r}", provider=self.name, raw=data
+                )
+            result.append(Service(code=str(item["code"]), name=item.get("name"), raw=item))
+        return result
+
+    def get_countries(self) -> list[Country]:
+        try:
+            data = self._request("getCountries")
+        except ProviderAPIError as exc:
+            if exc.code in self._UNSUPPORTED_ACTION_CODES:
+                raise NotImplementedError(f"{self.name} does not support getCountries") from exc
+            raise
+        # Live HeroSMS responds with a dict keyed by id; the official OpenAPI example
+        # shows a list of the same objects instead - accept both.
+        if isinstance(data, dict):
+            pairs: list[tuple[str | None, Any]] = list(data.items())
+        elif isinstance(data, list):
+            pairs = [(None, item) for item in data]
+        else:
+            raise ProviderAPIError(
+                f"unexpected getCountries response: {data!r}", provider=self.name, raw=data
+            )
+        result = []
+        for key, item in pairs:
+            if not isinstance(item, dict):
+                raise ProviderAPIError(
+                    f"unexpected country entry: {item!r}", provider=self.name, raw=data
+                )
+            item_id = item.get("id")
+            code = str(item_id) if item_id is not None else (key or "")
+            name = item.get("eng") or item.get("rus")
+            result.append(Country(code=code, name=name, raw=item))
+        return result
 
     # --- status/code parsing ---
 
