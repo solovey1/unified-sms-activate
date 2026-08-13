@@ -153,7 +153,23 @@ provider = HeroSmsProvider(
 ```
 
 `proxy` and `client` are mutually exclusive — if you pass your own
-`httpx.Client`, configure the proxy on it directly instead.
+`httpx.AsyncClient`, configure the proxy on it directly instead.
+
+## One provider instance = one event loop
+
+A provider owns an `httpx.AsyncClient`, and that client is bound to the
+event loop it first runs in. Reusing a provider across separate
+`asyncio.run()` calls (e.g. one per menu action or per job) fails with
+`RuntimeError: Event loop is closed` — create the provider *inside* the
+loop that uses it, or keep one long-lived loop for the whole app:
+
+```python
+async def handle_action():
+    async with HeroSmsProvider(api_key="...") as provider:  # per-run
+        ...
+
+asyncio.run(handle_action())
+```
 
 ## Exceptions
 
