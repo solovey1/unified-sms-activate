@@ -31,9 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OnlineSimProvider` — dedicated client for the OnlineSim API.
 - `VakSmsProvider` — thin `SmsActivateCompatibleProvider` subclass for
   [vak-sms.com](https://vak-sms.com).
+- `SmsActivateProvider` — thin subclass for the original
+  [SMS-Activate](https://sms-activate.ae) service; any other
+  sms-activate-protocol host can be used without subclassing by passing
+  `base_url`/`name` to `SmsActivateCompatibleProvider` (also via `from_config`).
 - `proxy` constructor parameter on `SmsActivateCompatibleProvider` and
   `OnlineSimProvider` for routing requests through an HTTP(S)/SOCKS proxy.
 - Discovery: `get_services()`/`get_countries()` on `BaseSmsProvider` (opt-in,
   raise `NotImplementedError` by default), with `Service`/`Country` DTOs,
   implemented for `SmsActivateCompatibleProvider` and `OnlineSimProvider`.
 - Async-first API built on `httpx.AsyncClient`.
+- `PhoneNumber.country_phone_code`; opt-in `getNumberV2` for
+  sms-activate-compatible providers (`use_get_number_v2`).

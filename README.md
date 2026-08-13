@@ -28,6 +28,7 @@ async def main() -> None:
     async with HeroSmsProvider(api_key="...") as provider:
         number = await provider.get_number(service="tg", country=0)
         print(number.phone)
+        print(number.country_phone_code)  # "62" or None
         code = await provider.wait_code(number.id, timeout=180)
         print(code.code)
         await provider.finish(number.id)
@@ -38,8 +39,17 @@ asyncio.run(main())
 ## Supported services
 
 - **HeroSMS** (`sms_providers.providers.HeroSmsProvider`) - sms-activate-compatible.
+- **SMS-Activate** (`sms_providers.providers.SmsActivateProvider`) - the original
+  service behind the protocol. Note: unreachable from some regions/networks;
+  pass a mirror via `base_url=` if the default host times out.
 - **VAK SMS** (`sms_providers.providers.VakSmsProvider`) - sms-activate-compatible.
 - **OnlineSim** (`sms_providers.providers.OnlineSimProvider`) - own protocol.
+
+`PhoneNumber.country_phone_code` (the E.164 phone prefix, no `+`) is only
+filled in for sms-activate-compatible providers when `use_get_number_v2 =
+True` (on by default for HeroSMS, since plain-text `getNumber` doesn't carry
+it) - it's always filled in for OnlineSim, whose `country` parameter already
+is the phone prefix.
 
 Service and country codes (`service="tg"`, `country=0`, ...) are passed
 through untouched to each provider's native API. The package does **not**
@@ -79,6 +89,33 @@ class MyClone(SmsActivateCompatibleProvider):
 That's the whole class. If your clone's error codes or status codes differ
 from the vanilla protocol, override `extra_error_map` / `extra_status_map`
 (they're merged on top of the built-in tables).
+
+No subclass is needed at all if you just want to point the package at an
+sms-activate-protocol host (a mirror, a self-hosted clone, a service we
+don't ship a class for) - `base_url` and `name` are constructor parameters:
+
+```python
+from sms_providers import SmsActivateCompatibleProvider
+
+provider = SmsActivateCompatibleProvider(
+    api_key="...",
+    name="my-host",
+    base_url="https://my-host.example/stubs/handler_api.php",
+)
+```
+
+The same works through `from_config` - the base class is registered as
+`"sms-activate-compatible"`:
+
+```python
+manager = SmsProviderManager.from_config({
+    "my-host": {
+        "provider": "sms-activate-compatible",
+        "api_key": "...",
+        "base_url": "https://my-host.example/stubs/handler_api.php",
+    },
+})
+```
 
 ### Fully custom protocol
 

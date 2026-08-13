@@ -7,6 +7,7 @@ Importing this package registers ``SmsActivateCompatibleProvider``,
 
 from .hero_sms import HeroSmsProvider
 from .online_sim import OnlineSimProvider
+from .sms_activate import SmsActivateProvider
 from .sms_activate_compatible import SmsActivateCompatibleProvider
 from .vak_sms import VakSmsProvider
 
@@ -14,5 +15,6 @@ __all__ = [
     "HeroSmsProvider",
     "OnlineSimProvider",
     "SmsActivateCompatibleProvider",
+    "SmsActivateProvider",
     "VakSmsProvider",
 ]

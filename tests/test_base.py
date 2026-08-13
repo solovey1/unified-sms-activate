@@ -139,3 +139,18 @@ async def test_get_services_and_get_countries_raise_not_implemented_by_default()
         await provider.get_services()
     with pytest.raises(NotImplementedError):
         await provider.get_countries()
+
+
+# 61. PhoneNumber.country_phone_code defaults to None, DTO stays frozen,
+# equality and str() are unaffected.
+def test_phone_number_country_phone_code_defaults_to_none():
+    number = PhoneNumber(id="1", phone="79001112233", provider="dummy")
+    assert number.country_phone_code is None
+    with pytest.raises(FrozenInstanceError):
+        number.country_phone_code = "7"  # type: ignore[misc]
+
+    with_code = PhoneNumber(id="1", phone="79001112233", provider="dummy", country_phone_code="7")
+    same = PhoneNumber(id="1", phone="79001112233", provider="dummy", country_phone_code="7")
+    assert with_code == same
+    assert with_code != number
+    assert str(with_code) == "79001112233"

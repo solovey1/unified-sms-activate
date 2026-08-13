@@ -78,6 +78,9 @@ class PhoneNumber:
     provider: str
     service: str | None = None
     country: str | None = None
+    """Country code in the provider's own numbering (sms-activate: 6 = Indonesia)."""
+    country_phone_code: str | None = None
+    """E.164 phone prefix without "+" (62 = Indonesia). None if the provider didn't report it."""
     cost: Decimal | None = None
     raw: Mapping[str, Any] = field(default_factory=dict)
     """Escape hatch: the provider's raw response for this call."""

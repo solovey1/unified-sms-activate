@@ -26,7 +26,11 @@ class HeroSmsProvider(SmsActivateCompatibleProvider):
       Authorization: ApiKey <token> header.
     * getServicesList (get_services()) accepts optional country and lang
       query parameters; getCountries (get_countries()) takes none.
+    * getNumberV2 (used here via use_get_number_v2 = True) reports
+      countryPhoneCode and activationCost, neither of which is present in
+      plain-text getNumber's ACCESS_NUMBER:{id}:{phone} response.
     """
 
     name = "hero-sms"
     base_url = "https://hero-sms.com/stubs/handler_api.php"
+    use_get_number_v2 = True

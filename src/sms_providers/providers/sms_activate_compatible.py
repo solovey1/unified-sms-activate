@@ -101,6 +101,16 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
     ``"http://user:pass@host:port"`` or ``"socks5://host:port"`` (SOCKS
     requires the ``httpx[socks]`` extra). Mutually exclusive with ``client``
     - configure the proxy on your own client instead if you pass one.
+
+    ``use_get_number_v2`` (class attribute, or constructor kwarg which wins
+    when both are given) switches ``get_number`` to ``action=getNumberV2``,
+    a JSON response that additionally reports ``country_phone_code`` and
+    ``cost`` on the returned ``PhoneNumber``. Off by default: ``getNumber``
+    is supported by every clone, V2 is not guaranteed everywhere. There is
+    no automatic fallback from V2 to ``getNumber`` on error - ``get_number``
+    is the one method that spends money, and retrying on a different action
+    after an ambiguous V2 response risks buying a second number for an
+    activation we couldn't even identify to cancel.
     """
 
     name: ClassVar[str] = "sms-activate-compatible"
@@ -109,6 +119,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
     action_param: ClassVar[str] = "action"
     default_country: ClassVar[str | int | None] = 0
     default_poll_interval: ClassVar[float] = 5.0
+    use_get_number_v2: ClassVar[bool] = False
 
     extra_error_map: ClassVar[Mapping[str, type[SmsProviderError]]] = {}
     extra_status_map: ClassVar[Mapping[str, ActivationStatus]] = {}
@@ -136,6 +147,7 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         extra_params: Mapping[str, Any] | None = None,
         client: httpx.AsyncClient | None = None,
         proxy: str | None = None,
+        use_get_number_v2: bool | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -156,6 +168,9 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         )
         self.max_retries = max_retries
         self.extra_params = dict(extra_params) if extra_params else {}
+        self.use_get_number_v2 = (  # type: ignore[misc] # deliberate per-instance override, like self.name above
+            use_get_number_v2 if use_get_number_v2 is not None else type(self).use_get_number_v2
+        )
         self._throttle = Throttle(min_request_interval) if min_request_interval > 0 else None
         self._client, self._owns_client = build_client(timeout=timeout, client=client, proxy=proxy)
 
@@ -248,6 +263,15 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         **extra: Any,
     ) -> PhoneNumber:
         country_value = country if country is not None else self.default_country
+        # "maxPrice" passed via **extra (the API's native spelling) must not
+        # collide with the max_price kwarg; the explicit kwarg wins.
+        extra_max_price = extra.pop("maxPrice", None)
+        if max_price is None:
+            max_price = extra_max_price
+        if self.use_get_number_v2:
+            return await self._get_number_v2(
+                service, country_value, operator=operator, max_price=max_price, **extra
+            )
         body = await self._request(
             "getNumber",
             service=service,
@@ -269,6 +293,59 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             service=service,
             country=str(country_value) if country_value is not None else None,
             raw={"body": body},
+        )
+
+    async def _get_number_v2(
+        self,
+        service: str,
+        country_value: str | int | None,
+        *,
+        operator: str | None,
+        max_price: str | None,
+        **extra: Any,
+    ) -> PhoneNumber:
+        """``action=getNumberV2`` - JSON response, reports ``country_phone_code``/``cost``.
+
+        No fallback to ``getNumber`` on any error here - see the class
+        docstring. ``NO_NUMBERS`` still arrives as plain text with HTTP 200
+        and is already handled by :meth:`_request`'s own parser.
+        """
+        data = await self._request(
+            "getNumberV2",
+            service=service,
+            country=country_value,
+            operator=operator,
+            maxPrice=max_price,
+            **extra,
+        )
+        if not isinstance(data, dict) or "activationId" not in data or "phoneNumber" not in data:
+            raise ProviderAPIError(
+                f"unexpected getNumberV2 response: {data!r}", provider=self.name, raw=data
+            )
+        country_code = data.get("countryCode")
+        country_phone_code = data.get("countryPhoneCode")
+        raw_cost = data.get("activationCost")
+        cost: Decimal | None
+        if raw_cost is None:
+            cost = None
+        else:
+            try:
+                cost = Decimal(str(raw_cost))
+            except InvalidOperation:
+                cost = None
+        return PhoneNumber(
+            id=str(data["activationId"]),
+            phone=str(data["phoneNumber"]),
+            provider=self.name,
+            service=service,
+            country=(
+                str(country_code)
+                if country_code is not None
+                else (str(country_value) if country_value is not None else None)
+            ),
+            country_phone_code=str(country_phone_code) if country_phone_code is not None else None,
+            cost=cost,
+            raw=data,
         )
 
     async def get_status(self, activation_id: str) -> ActivationStatus:

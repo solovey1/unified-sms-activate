@@ -533,6 +533,137 @@ async def test_get_countries_bad_key_raises_invalid_api_key_not_not_implemented(
         await provider.get_countries()
 
 
+# 62. use_get_number_v2=False (default): action=getNumber, country_phone_code is
+# None, cost is None - old behavior unbroken.
+async def test_get_number_v2_disabled_by_default_uses_get_number():
+    recorder = responses(httpx.Response(200, text="ACCESS_NUMBER:123:79001112233"))
+    provider = make_provider(recorder)
+    number = await provider.get_number(service="tg", country=7)
+    assert recorder.requests[0].url.params["action"] == "getNumber"
+    assert number.country_phone_code is None
+    assert number.cost is None
+
+
+# 63. use_get_number_v2=True on a live-shaped V2 example.
+async def test_get_number_v2_parses_live_example():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "activationId": 635468024,
+                "phoneNumber": "79584******",
+                "countryCode": 6,
+                "countryPhoneCode": 62,
+                "activationCost": "12.5",
+                "currency": 840,
+                "activationTime": "2026-08-13 10:00:00",
+                "activationEndTime": "2026-08-13 10:20:00",
+                "canGetAnotherSms": True,
+                "activationOperator": "beeline",
+            },
+        )
+    )
+    provider = make_provider(recorder, use_get_number_v2=True)
+    number = await provider.get_number(service="tg", country=6)
+    assert recorder.requests[0].url.params["action"] == "getNumberV2"
+    assert number.id == "635468024"
+    assert number.phone == "79584******"
+    assert number.country == "6"
+    assert number.country_phone_code == "62"
+    assert number.cost == Decimal("12.5")
+    assert number.raw["currency"] == 840
+    assert number.raw["activationEndTime"] == "2026-08-13 10:20:00"
+
+
+# 64. V2 branch + plain text NO_NUMBERS with HTTP 200 -> NoNumbersAvailable.
+async def test_get_number_v2_no_numbers_plain_text_raises_no_numbers_available():
+    recorder = responses(httpx.Response(200, text="NO_NUMBERS"))
+    provider = make_provider(recorder, use_get_number_v2=True)
+    with pytest.raises(NoNumbersAvailable):
+        await provider.get_number(service="tg")
+
+
+# 65. V2 branch + JSON {"title":"NO_BALANCE"} with HTTP 402 -> InsufficientBalance,
+# and recorder.call_count == 1 - no fallback to getNumber (double-purchase regression).
+async def test_get_number_v2_no_balance_does_not_fall_back_to_get_number():
+    recorder = responses(
+        httpx.Response(402, json={"title": "NO_BALANCE", "details": "Not enough funds"})
+    )
+    provider = make_provider(recorder, use_get_number_v2=True)
+    with pytest.raises(InsufficientBalance):
+        await provider.get_number(service="tg")
+    assert recorder.call_count == 1
+
+
+# 66. V2 branch without countryPhoneCode in the response -> country_phone_code is
+# None, the rest of the fields are still filled.
+async def test_get_number_v2_missing_country_phone_code_is_none():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "activationId": 1,
+                "phoneNumber": "79001112233",
+                "countryCode": 7,
+            },
+        )
+    )
+    provider = make_provider(recorder, use_get_number_v2=True)
+    number = await provider.get_number(service="tg")
+    assert number.id == "1"
+    assert number.phone == "79001112233"
+    assert number.country == "7"
+    assert number.country_phone_code is None
+    assert number.cost is None
+
+
+# 67. V2 branch without activationId -> ProviderAPIError.
+async def test_get_number_v2_missing_activation_id_raises_provider_api_error():
+    recorder = responses(httpx.Response(200, json={"phoneNumber": "79001112233"}))
+    provider = make_provider(recorder, use_get_number_v2=True)
+    with pytest.raises(ProviderAPIError):
+        await provider.get_number(service="tg")
+
+
+# 68. use_get_number_v2=True via the constructor (not a subclass) enables V2 -
+# the from_config path for a bare SmsActivateCompatibleProvider.
+async def test_get_number_v2_enabled_via_constructor_kwarg():
+    recorder = responses(
+        httpx.Response(200, json={"activationId": 1, "phoneNumber": "79001112233"})
+    )
+    provider = SmsActivateCompatibleProvider(
+        api_key="test-key",
+        base_url="https://sms-activate.example/stubs/handler_api.php",
+        client=make_client(recorder),
+        use_get_number_v2=True,
+    )
+    assert provider.use_get_number_v2 is True
+    number = await provider.get_number(service="tg")
+    assert recorder.requests[0].url.params["action"] == "getNumberV2"
+    assert number.id == "1"
+
+
+# 69. A 4-line clone (name, base_url, use_get_number_v2 = True) goes through
+# get_number and reports country_phone_code.
+async def test_four_line_clone_with_v2_reports_country_phone_code():
+    @SmsProviderManager.register()
+    class _FourLineV2Clone(SmsActivateCompatibleProvider):
+        name = "test-four-line-v2-clone"
+        base_url = "https://four-line-v2-clone.example/stubs/handler_api.php"
+        use_get_number_v2 = True
+
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={"activationId": 42, "phoneNumber": "79001112233", "countryPhoneCode": 7},
+        )
+    )
+    provider = _FourLineV2Clone(api_key="test-key", client=make_client(recorder))
+    number = await provider.get_number(service="tg")
+    assert number.id == "42"
+    assert number.country_phone_code == "7"
+
+
 # §12.6: cancelling a task awaiting wait_code() propagates asyncio.CancelledError,
 # not SmsProviderError - invariant #6 in BaseSmsProvider's docstring.
 async def test_cancelling_wait_code_task_propagates_cancelled_error(monkeypatch):
@@ -562,3 +693,13 @@ def test_provider_constructed_outside_event_loop_works_in_asyncio_run():
         return await provider.get_balance()
 
     assert asyncio.run(main()) == Decimal("1.000")
+
+
+# "maxPrice" via **extra (the API's native spelling) must not raise a duplicate
+# kwarg TypeError; it feeds the maxPrice query parameter.
+async def test_get_number_accepts_native_maxprice_spelling():
+    recorder = responses(httpx.Response(200, text="ACCESS_NUMBER:123:79001112233"))
+    provider = make_provider(recorder)
+    number = await provider.get_number(service="tg", maxPrice="0.5")
+    assert number.phone == "79001112233"
+    assert recorder.requests[0].url.params["maxPrice"] == "0.5"

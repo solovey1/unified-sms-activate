@@ -287,9 +287,13 @@ class OnlineSimProvider(BaseSmsProvider):
             )
         tzid = str(data["tzid"])
         phone: str | None = data.get("number") or None
+        # OnlineSim's country IS the E.164 phone prefix (no "+"): "7" for Russia,
+        # "86" for China. Both PhoneNumber fields carry the same value unless the
+        # getState poll below reports a more authoritative one.
+        resolved_country = str(country_value) if country_value is not None else None
         if phone is None:
             try:
-                phone = await self._poll(
+                phone, polled_country = await self._poll(
                     lambda: self._peek_number(tzid),
                     timeout=self.number_timeout,
                     interval=self.poll_interval,
@@ -300,6 +304,9 @@ class OnlineSimProvider(BaseSmsProvider):
                 except SmsProviderError:
                     pass
                 raise
+            if polled_country is not None:
+                resolved_country = polled_country
+        assert phone is not None
         return PhoneNumber(
             id=tzid,
             # OnlineSim returns numbers as "+79001234567"; the PhoneNumber
@@ -307,18 +314,21 @@ class OnlineSimProvider(BaseSmsProvider):
             phone=phone.lstrip("+"),
             provider=self.name,
             service=service,
-            country=str(country_value) if country_value is not None else None,
+            country=resolved_country,
+            country_phone_code=resolved_country,
             raw={"getNum": data},
         )
 
-    async def _peek_number(self, tzid: str) -> str | None:
+    async def _peek_number(self, tzid: str) -> tuple[str, str | None] | None:
         """Poll step used while waiting for ``getNum`` to allocate a number.
 
         Unlike :meth:`_state`, an empty element list here means the operation
         is not visible yet right after ``getNum`` - keep waiting instead of
         raising ``ActivationNotFound``. ``TZ_OVER_EMPTY`` means the operation
         already expired, so stop waiting immediately instead of looping until
-        ``number_timeout``.
+        ``number_timeout``. Returns ``(phone, country)`` once a number is
+        assigned - ``country`` is whatever ``getState`` reported for this
+        element, ``None`` if it didn't include one.
         """
         elements = await self._getstate_elements(tzid)
         if not elements:
@@ -334,7 +344,11 @@ class OnlineSimProvider(BaseSmsProvider):
                 status=ActivationStatus.EXPIRED,
                 provider=self.name,
             )
-        return element.get("number") or None
+        number = element.get("number") or None
+        if number is None:
+            return None
+        element_country = element.get("country")
+        return number, (str(element_country) if element_country is not None else None)
 
     async def get_status(self, activation_id: str) -> ActivationStatus:
         element = await self._state(str(activation_id))

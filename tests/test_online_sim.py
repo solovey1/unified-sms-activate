@@ -391,3 +391,50 @@ async def test_get_services_wrong_key_raises_invalid_api_key():
     provider = make_provider(recorder)
     with pytest.raises(InvalidApiKey):
         await provider.get_services()
+
+
+# 70. get_number(service=..., country=49) -> country == "49" and country_phone_code == "49"
+# (OnlineSim's "country" already is the E.164 phone prefix).
+async def test_get_number_country_and_country_phone_code_match_request():
+    recorder = responses(
+        httpx.Response(
+            200, json={"response": 1, "tzid": 1, "number": "4900001112233", "country": 49}
+        )
+    )
+    provider = make_provider(recorder)
+    number = await provider.get_number(service="tg", country=49)
+    assert number.country == "49"
+    assert number.country_phone_code == "49"
+
+
+# 71. Without country, the default (7) is used for both fields. If the number was
+# obtained via polling and the getState element reports "country": 380, both
+# fields switch to that value instead - polled state is more authoritative than
+# the requested/default value.
+async def test_get_number_country_defaults_and_polled_override():
+    recorder = responses(
+        httpx.Response(200, json={"response": 1, "tzid": 1, "number": "79001112233"})
+    )
+    provider = make_provider(recorder)
+    number = await provider.get_number(service="tg")
+    assert number.country == "7"
+    assert number.country_phone_code == "7"
+
+    recorder2 = responses(
+        httpx.Response(200, json={"response": 1, "tzid": 2}),
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "response": "TZ_NUM_WAIT",
+                    "tzid": 2,
+                    "number": "38000001112233",
+                    "country": 380,
+                }
+            ],
+        ),
+    )
+    provider2 = make_provider(recorder2)
+    number2 = await provider2.get_number(service="tg")
+    assert number2.country == "380"
+    assert number2.country_phone_code == "380"
