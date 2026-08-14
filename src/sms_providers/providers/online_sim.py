@@ -230,16 +230,36 @@ class OnlineSimProvider(BaseSmsProvider):
         return element
 
     @staticmethod
-    def _extract_code(msg: Any) -> str | None:
-        """``msg`` can be ``false``, ``""``, ``None``, or a list (``msg_list=1``)."""
+    def _msg_text(item: Any) -> str | None:
+        """One ``msg`` entry -> its string, or ``None``.
+
+        With ``msg_list=1`` the entries are objects - ``{"service": "bybit",
+        "msg": "468683"}`` - verified live; without it, ``msg`` is a plain
+        string. Both forms are accepted here.
+        """
+        if isinstance(item, dict):
+            item = item.get("msg")
+        return item if isinstance(item, str) and item else None
+
+    @classmethod
+    def _extract_code(cls, msg: Any) -> str | None:
+        """``msg`` can be ``false``, ``""``, ``None``, a string, or a list.
+
+        The list form only appears with ``msg_list=1``, which neither
+        :meth:`get_code` nor :meth:`wait_code` sends. It is handled anyway,
+        and takes the FIRST entry: on a live activation holding several
+        messages, the plain (non-list) ``msg`` the API returns for the same
+        operation was exactly the first entry of that list, so the first is
+        what the service itself calls the active message. ``orderby`` had no
+        effect on that order.
+        """
         if isinstance(msg, list):
-            for item in reversed(msg):
-                if isinstance(item, str) and item:
-                    return item
+            for item in msg:
+                code = cls._msg_text(item)
+                if code:
+                    return code
             return None
-        if isinstance(msg, str) and msg:
-            return msg
-        return None
+        return cls._msg_text(msg)
 
     def _parse_state_element(
         self, element: Mapping[str, Any]
@@ -412,16 +432,46 @@ class OnlineSimProvider(BaseSmsProvider):
         """
         await self._request("setOperationOk", tzid=str(activation_id))
 
-    async def get_messages(self, activation_id: str) -> list[Any]:
+    async def get_messages(self, activation_id: str) -> list[SmsCode]:
+        """Every code received on this activation (``msg_list=1&message_to_code=1``).
+
+        ``received_at`` is always ``None``: OnlineSim reports no per-message
+        timestamp - ``getState``'s ``time`` is the operation's REMAINING
+        seconds, not a receipt time (checked against the official OpenAPI
+        spec AND a live response). ``text`` is ``None`` too, because
+        ``message_to_code=1`` hands back only the extracted code; for the
+        full text use :meth:`get_raw_messages`.
+
+        The list is NOT de-duplicated: a live activation answered with the
+        same code twice in a row (four entries, two distinct codes), and
+        which of those repeats is a real second SMS is the caller's call.
+        """
+        items, _element = await self._msg_list(activation_id, message_to_code=1)
+        return [
+            SmsCode(code=code, raw=item if isinstance(item, dict) else {"msg": item})
+            for item, code in ((item, self._msg_text(item)) for item in items)
+            if code
+        ]
+
+    async def get_raw_messages(self, activation_id: str) -> list[Any]:
         """Return the raw list of SMS messages for the activation (full text included).
 
-        Unlike :meth:`get_code`/:meth:`wait_code`, which use
-        ``message_to_code=1`` and therefore only see the extracted code,
+        Unlike :meth:`get_code`/:meth:`wait_code`/:meth:`get_messages`, which
+        use ``message_to_code=1`` and therefore only see the extracted code,
         this uses ``msg_list=1&message_to_code=0`` to retrieve the message(s)
-        exactly as the API returns them.
+        exactly as the API returns them. The element shape is undocumented;
+        live it is ``{"service": "bybit", "msg": "<full SMS text>"}`` - no
+        timestamp anywhere - which is why the result stays raw.
         """
+        items, _element = await self._msg_list(activation_id, message_to_code=0)
+        return items
+
+    async def _msg_list(
+        self, activation_id: str, *, message_to_code: int
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """``getState`` with ``msg_list=1`` -> (messages, the state element)."""
         data = await self._request(
-            "getState", tzid=str(activation_id), msg_list=1, message_to_code=0
+            "getState", tzid=str(activation_id), msg_list=1, message_to_code=message_to_code
         )
         if not isinstance(data, list) or not data:
             raise ActivationNotFound(
@@ -430,12 +480,14 @@ class OnlineSimProvider(BaseSmsProvider):
                 code=str(activation_id),
             )
         element = data[0]
+        if not isinstance(element, dict):
+            raise ProviderAPIError(
+                f"unexpected getState element: {element!r}", provider=self.name, raw=data
+            )
         msg = element.get("msg")
         if isinstance(msg, list):
-            return msg
-        if msg:
-            return [msg]
-        return []
+            return msg, element
+        return ([msg] if msg else []), element
 
     # --- discovery ---
 

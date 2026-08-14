@@ -328,6 +328,17 @@ class BaseSmsProvider(ABC):
         """Non-blocking check for a code. ``None`` means no code yet."""
         raise NotImplementedError
 
+    async def get_messages(self, activation_id: str) -> list[SmsCode]:
+        """Every SMS received on this activation, not just the last one.
+
+        Element order follows the API's own order (oldest first on both
+        providers that implement this). ``SmsCode.text`` and
+        ``SmsCode.received_at`` are filled only where the provider reports
+        them - see each implementation's docstring. An empty list is a valid
+        result, not an error.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_messages()")
+
     async def get_services(
         self, country: str | int | None = None, search: str | None = None
     ) -> list[Service]:

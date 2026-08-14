@@ -608,3 +608,70 @@ async def test_get_services_search_unknown_service_returns_empty():
     provider = make_provider(recorder)
     assert await provider.get_services(search="nosuch") == []
     assert recorder.call_count == 1
+
+
+# get_messages: msg_list=1 entries are objects ({"service","msg"}) - verified live
+# on tzid 204724940, which held four entries / two distinct codes.
+async def test_get_messages_returns_every_code_without_deduplication():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "country": 48, "service": "bybit", "number": "+48784164323",
+                    "response": "TZ_NUM_ANSWER", "tzid": 204724940, "time": 314,
+                    "msg": [
+                        {"service": "bybit", "msg": "468683"},
+                        {"service": "bybit", "msg": "468683"},
+                        {"service": "bybit", "msg": "296330"},
+                        {"service": "bybit", "msg": "296330"},
+                    ],
+                    "form": "index",
+                }
+            ],
+        )
+    )
+    provider = make_provider(recorder)
+    messages = await provider.get_messages("204724940")
+    assert [m.code for m in messages] == ["468683", "468683", "296330", "296330"]
+    assert all(m.received_at is None and m.text is None for m in messages)
+    assert recorder.requests[0].url.params["msg_list"] == "1"
+    assert recorder.requests[0].url.params["message_to_code"] == "1"
+
+
+async def test_get_messages_without_any_sms_returns_empty_list():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json=[{"response": "TZ_NUM_WAIT", "tzid": 1, "msg": False, "form": "index"}],
+        )
+    )
+    provider = make_provider(recorder)
+    assert await provider.get_messages("1") == []
+
+
+# get_raw_messages keeps the full SMS text (message_to_code=0)
+async def test_get_raw_messages_returns_entries_verbatim():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "response": "TZ_NUM_ANSWER", "tzid": 1, "form": "index",
+                    "msg": [{"service": "bybit", "msg": "Your verification code is 468683."}],
+                }
+            ],
+        )
+    )
+    provider = make_provider(recorder)
+    assert await provider.get_raw_messages("1") == [
+        {"service": "bybit", "msg": "Your verification code is 468683."}
+    ]
+    assert recorder.requests[0].url.params["message_to_code"] == "0"
+
+
+async def test_get_messages_unknown_tzid_raises_activation_not_found():
+    recorder = responses(httpx.Response(200, json=[]))
+    provider = make_provider(recorder)
+    with pytest.raises(ActivationNotFound):
+        await provider.get_messages("1")

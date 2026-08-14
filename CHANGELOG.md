@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_messages(activation_id) -> list[SmsCode]` on `BaseSmsProvider` (opt-in,
+  `NotImplementedError` by default): every SMS of an activation, not just the
+  active one. `SmsActivateCompatibleProvider` implements it via
+  `action=getAllSms` with full text and `received_at`; `OnlineSimProvider` via
+  `getState&msg_list=1` (codes only - the API reports no timestamp).
+- `SmsCode.received_at` is now filled from `getStatusV2`'s `sms.dateTime`.
+
+### Changed
+
+- `OnlineSimProvider.get_messages()` returns `list[SmsCode]`; the previous
+  raw-list behaviour moved to `get_raw_messages()` unchanged.
+- OnlineSim `msg` entries are parsed as objects (`{"service", "msg"}`), the
+  form the live API actually returns with `msg_list=1`; the code list is read
+  first-entry-first, matching the entry the API itself returns as the active
+  message.
+
 ### Planned
 
 - Optional auto-discovery of third-party providers via `entry_points`

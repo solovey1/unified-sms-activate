@@ -106,6 +106,35 @@ Support and exact behavior vary by provider - see each provider's
 docstring. `count == 0` is a real, meaningful value (out of stock) and is
 never filtered out; it's up to the caller to decide what to do with it.
 
+## All SMS of one activation
+
+`wait_code()`/`get_code()` hand back one code — the one the service calls
+active. When a number received several messages (a resend, a second
+`request_retry()`), `get_messages()` returns all of them:
+
+```python
+for sms in await provider.get_messages(number.id):
+    print(sms.code, sms.text, sms.received_at)
+```
+
+Opt-in, like the discovery methods — providers that can't do it raise
+`NotImplementedError`. What each one actually fills in:
+
+| Provider | Source | `text` | `received_at` |
+| --- | --- | --- | --- |
+| `HeroSmsProvider` / sms-activate clones with the action | `action=getAllSms` | yes | yes (RFC3339) |
+| `OnlineSimProvider` | `getState&msg_list=1` | no — see below | no, the API reports none |
+
+`getAllSms` is not part of the vanilla sms-activate protocol (hero-sms
+declares it in its OpenAPI spec); clones without it answer `BAD_ACTION` →
+`ProviderAPIError`, and it stops working once the activation is closed
+(`ACTIVATION_NOT_ACTIVE` → `OperationNotAllowed`), so read the list before
+`finish()`.
+
+For OnlineSim the list is codes only; `get_raw_messages()` returns the same
+messages with their full text, exactly as the API sends them. Neither
+de-duplicates: a live activation answered with each code twice.
+
 ## Adding your own service
 
 You don't need to fork this repository to add a service — implement the
@@ -284,6 +313,10 @@ All exceptions raised by providers subclass `SmsProviderError`.
   activations (only regular SMS activations, v1 scope).
 - No normalization of service/country codes between providers - each
   provider's codes are its own, native ones.
+- `get_messages()` carries no `received_at` on OnlineSim: the API reports no
+  per-message timestamp (`getState`'s `time` is the operation's remaining
+  seconds), verified against both the official OpenAPI spec and a live
+  activation.
 
 API keys are only ever taken from constructor/config parameters - this
 repository and its tests contain no real keys, only the literal `"test-key"`.

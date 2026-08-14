@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
 
@@ -80,6 +81,22 @@ SMS_ACTIVATE_STATUSES: Mapping[str, ActivationStatus] = {
 }
 
 _RETRY_BACKOFF = 0.5
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    """RFC3339/``YYYY-MM-DD HH:MM:SS`` -> ``datetime``; ``None`` if unparseable.
+
+    A timestamp is a nice-to-have, never a reason to fail a call, so anything
+    the stdlib parser rejects (including the spec's own ``0000-00-00
+    00:00:00`` placeholder) degrades to ``None``.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        # ponytail: py3.10's fromisoformat has no "Z" support; the replace covers it.
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 @SmsProviderManager.register()
@@ -365,6 +382,40 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
             )
         return code
 
+    async def get_messages(self, activation_id: str) -> list[SmsCode]:
+        """``action=getAllSms`` - every OTP of the activation, with timestamps.
+
+        Not part of the vanilla sms-activate protocol: hero-sms declares it
+        in its OpenAPI spec (``{"data": [...], "meta": {...}}``, each item
+        carrying ``code``/``text``/``date``), other clones answer
+        ``BAD_ACTION`` -> :class:`ProviderAPIError`. The service also refuses
+        it once the activation is closed (``ACTIVATION_NOT_ACTIVE`` ->
+        :class:`OperationNotAllowed`), so read the list before ``finish()``.
+        Pagination (``size``/``page``) is not exposed: one activation's SMS
+        fit in the default page.
+        """
+        data = await self._request("getAllSms", id=str(activation_id))
+        items = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            raise ProviderAPIError(
+                f"unexpected getAllSms response: {data!r}", provider=self.name, raw=data
+            )
+        messages = []
+        for item in items:
+            # ponytail: entries with no code yet (a voice OTP still being parsed)
+            # are dropped - SmsCode has no meaningful shape without a code.
+            if not isinstance(item, dict) or not item.get("code"):
+                continue
+            messages.append(
+                SmsCode(
+                    code=str(item["code"]),
+                    text=item.get("text"),
+                    received_at=_parse_datetime(item.get("date")),
+                    raw=item,
+                )
+            )
+        return messages
+
     async def wait_code(
         self,
         activation_id: str,
@@ -562,5 +613,8 @@ class SmsActivateCompatibleProvider(BaseSmsProvider):
         if not code:
             return ActivationStatus.WAITING, None
         return ActivationStatus.CODE_RECEIVED, SmsCode(
-            code=str(code), text=sms.get("text"), raw=response
+            code=str(code),
+            text=sms.get("text"),
+            received_at=_parse_datetime(sms.get("dateTime")),
+            raw=response,
         )

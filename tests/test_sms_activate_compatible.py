@@ -795,3 +795,75 @@ async def test_get_number_accepts_native_maxprice_spelling():
     number = await provider.get_number(service="tg", maxPrice="0.5")
     assert number.phone == "79001112233"
     assert recorder.requests[0].url.params["maxPrice"] == "0.5"
+
+
+# getAllSms: full SMS list with parsed timestamps; entries without a code are skipped
+async def test_get_all_sms_returns_messages_with_received_at():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "1", "phoneFrom": "Telegram", "code": "123456",
+                     "text": "Telegram code 123456", "service": "tg",
+                     "date": "2026-02-16T12:36:59+03:00", "type": "sms"},
+                    {"id": "2", "phoneFrom": "213421421431", "service": "tg",
+                     "date": "2026-02-16T12:40:00+03:00", "type": "call"},
+                ],
+                "meta": {"total": 2, "service": "full"},
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    messages = await provider.get_messages("635468021")
+    assert [m.code for m in messages] == ["123456"]
+    assert messages[0].text == "Telegram code 123456"
+    assert messages[0].received_at is not None
+    assert messages[0].received_at.hour == 12
+    assert recorder.requests[0].url.params["action"] == "getAllSms"
+    assert recorder.requests[0].url.params["id"] == "635468021"
+
+
+async def test_get_all_sms_empty_list_is_not_an_error():
+    recorder = responses(httpx.Response(200, json={"data": [], "meta": {"total": 0}}))
+    provider = make_provider(recorder)
+    assert await provider.get_messages("1") == []
+
+
+async def test_get_all_sms_unexpected_shape_raises_provider_api_error():
+    recorder = responses(httpx.Response(200, text="SOMETHING_ELSE"))
+    provider = make_provider(recorder)
+    with pytest.raises(ProviderAPIError):
+        await provider.get_messages("1")
+
+
+# getStatusV2 carries sms.dateTime -> SmsCode.received_at; garbage degrades to None
+async def test_verification_type_zero_parses_received_at():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "verificationType": 0,
+                "sms": {"dateTime": "2022-06-01 16:59:16", "code": "5551", "text": "x"},
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    code = await provider.get_code("1")
+    assert code is not None and code.received_at is not None
+    assert code.received_at.year == 2022
+
+
+async def test_verification_type_zero_unparseable_datetime_degrades_to_none():
+    recorder = responses(
+        httpx.Response(
+            200,
+            json={
+                "verificationType": 0,
+                "sms": {"dateTime": "0000-00-00 00:00:00", "code": "5551", "text": "x"},
+            },
+        )
+    )
+    provider = make_provider(recorder)
+    code = await provider.get_code("1")
+    assert code is not None and code.received_at is None
